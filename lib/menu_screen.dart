@@ -6,12 +6,14 @@ import 'checkout_screen.dart';
 import 'kitchen_screen.dart';
 import 'waiter_screen.dart';
 import 'assistance_screen.dart';
+import 'orders_screen.dart';
 import 'order_status_screen.dart';
 import 'shopping_cart_screen.dart';
 import 'food_details_screen.dart';
 import 'qr_scanner_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'session_bill_screen.dart';
+import 'user_session.dart';
 
 class FoodItem {
   final int itemDbId;
@@ -70,7 +72,7 @@ class MenuScreen extends StatefulWidget {
 }
 
 class _MenuScreenState extends State<MenuScreen> {
-  int _selectedCategoryId = 1;
+  int _selectedCategoryId = 0;
   List<FoodItem> _menuRepository = [];
   final Map<FoodItem, int> _orderCart = {};
   bool _isLoading = true;
@@ -81,188 +83,27 @@ class _MenuScreenState extends State<MenuScreen> {
   bool _isTakeoutSelected = false;
 
   final List<FoodItem> _testSamples = [
-    // Category 1: Pancit
     FoodItem(itemDbId: 1, categoryId: 1, name: 'Bihon', price: 165.00),
     FoodItem(itemDbId: 2, categoryId: 1, name: 'Mike Bihon', price: 165.00),
     FoodItem(itemDbId: 3, categoryId: 1, name: 'Canton', price: 175.00),
-    FoodItem(itemDbId: 4, categoryId: 1, name: 'Canton-Bihon', price: 175.00),
-    FoodItem(itemDbId: 5, categoryId: 1, name: 'Canton-Sotanghon', price: 175.00),
-    FoodItem(itemDbId: 6, categoryId: 1, name: 'Lomi', price: 165.00),
-    FoodItem(itemDbId: 7, categoryId: 1, name: 'Pancit Ulam', price: 165.00),
-
-    // Category 2: Pasta
     FoodItem(itemDbId: 8, categoryId: 2, name: 'Spaghetti', price: 95.00),
-    FoodItem(itemDbId: 9, categoryId: 2, name: 'Spaghetti W/ Chicken', price: 145.00),
     FoodItem(itemDbId: 10, categoryId: 2, name: 'Carbonara', price: 95.00),
-    FoodItem(itemDbId: 11, categoryId: 2, name: 'Carbonara W/ Chicken', price: 145.00),
-    FoodItem(itemDbId: 12, categoryId: 2, name: 'Baked Mac', price: 170.00),
-    FoodItem(itemDbId: 13, categoryId: 2, name: 'Palabok', price: 95.00),
-    FoodItem(itemDbId: 14, categoryId: 2, name: 'Lasagna', price: 170.00),
-    FoodItem(itemDbId: 142, categoryId: 2, name: 'Toowoomba', price: 179.00),
-    FoodItem(itemDbId: 143, categoryId: 2, name: 'Arrabiata Pasta', price: 169.00),
-    FoodItem(itemDbId: 144, categoryId: 2, name: 'Italian Meatball Pasta', price: 179.00),
-    FoodItem(itemDbId: 145, categoryId: 2, name: 'Junhwa Pasta', price: 189.00),
-    FoodItem(itemDbId: 146, categoryId: 2, name: 'Samgyup Cream Pasta', price: 179.00),
-
-    // Category 3: Sandwiches
     FoodItem(itemDbId: 15, categoryId: 3, name: 'Clubhouse W/ Fries', price: 135.00),
-    FoodItem(itemDbId: 16, categoryId: 3, name: 'Chicken Fillet Sandwich W/ Fries', price: 135.00),
-    FoodItem(itemDbId: 17, categoryId: 3, name: 'Tuna Sandwich', price: 75.00),
-    FoodItem(itemDbId: 18, categoryId: 3, name: 'Chicken Sandwich', price: 75.00),
-    FoodItem(itemDbId: 19, categoryId: 3, name: 'Cheese Burger', price: 135.00),
-    FoodItem(itemDbId: 20, categoryId: 3, name: 'Ham & Cheese Roll', price: 95.00),
-    FoodItem(itemDbId: 134, categoryId: 3, name: 'Classic Burger', price: 199.00),
-
-    // Category 4: Chicken Wings
     FoodItem(itemDbId: 21, categoryId: 4, name: 'Plain (Wings)', price: 335.00),
-    FoodItem(itemDbId: 22, categoryId: 4, name: 'Buffalo (Wings)', price: 385.00),
-    FoodItem(itemDbId: 23, categoryId: 4, name: 'Salted Egg (Wings)', price: 385.00),
-    FoodItem(itemDbId: 24, categoryId: 4, name: 'Garlic Butter (Wings)', price: 385.00),
-    FoodItem(itemDbId: 25, categoryId: 4, name: 'Garlic Parmesan (Wings)', price: 385.00),
-    FoodItem(itemDbId: 26, categoryId: 4, name: 'Honey Glazed (Wings)', price: 385.00),
-
-    // Category 5: Vegetables
     FoodItem(itemDbId: 27, categoryId: 5, name: 'Caesar Salad', price: 185.00),
-    FoodItem(itemDbId: 28, categoryId: 5, name: 'Chopsuey', price: 255.00),
-    FoodItem(itemDbId: 29, categoryId: 5, name: 'Chopsuey W/ Canton', price: 285.00),
-    FoodItem(itemDbId: 30, categoryId: 5, name: 'Buttered Mix Vegetable', price: 245.00),
-    FoodItem(itemDbId: 31, categoryId: 5, name: 'Menudong Gulay', price: 265.00),
-    FoodItem(itemDbId: 32, categoryId: 5, name: 'Pinakbet W/ Lechon Kawali', price: 345.00),
-
-    // Category 6: Daily Specials
     FoodItem(itemDbId: 33, categoryId: 6, name: 'Kare-Kare (Labot)', price: 375.00),
-    FoodItem(itemDbId: 34, categoryId: 6, name: 'Kare-Kare (Liempo)', price: 475.00),
-    FoodItem(itemDbId: 35, categoryId: 6, name: 'Tokwa’t Baboy', price: 175.00),
-    FoodItem(itemDbId: 36, categoryId: 6, name: 'Sinigang (Baboy)', price: 395.00),
-    FoodItem(itemDbId: 37, categoryId: 6, name: 'Sinigang (Hipon)', price: 445.00),
-    FoodItem(itemDbId: 38, categoryId: 6, name: 'Sinigang (Salmon Belly)', price: 325.00),
-    FoodItem(itemDbId: 39, categoryId: 6, name: 'Bulalo', price: 475.00),
-    FoodItem(itemDbId: 40, categoryId: 6, name: 'Sweet & Sour Tilapia', price: 225.00),
-    FoodItem(itemDbId: 41, categoryId: 6, name: 'Relyenong Bangus', price: 365.00),
-    FoodItem(itemDbId: 42, categoryId: 6, name: 'Daing Na Bangus', price: 245.00),
-    FoodItem(itemDbId: 43, categoryId: 6, name: 'Fish Fillet', price: 245.00),
-    FoodItem(itemDbId: 44, categoryId: 6, name: 'Crispy Pata', price: 700.00),
-    FoodItem(itemDbId: 45, categoryId: 6, name: 'Patatim', price: 750.00),
-    FoodItem(itemDbId: 46, categoryId: 6, name: 'Lechon Kawali', price: 475.00),
-    FoodItem(itemDbId: 47, categoryId: 6, name: 'Fried Chicken (Whole)', price: 445.00),
-    FoodItem(itemDbId: 48, categoryId: 6, name: 'Fried Chicken (Half)', price: 295.00),
-    FoodItem(itemDbId: 49, categoryId: 6, name: 'Cordon Bleu', price: 190.00),
-    FoodItem(itemDbId: 50, categoryId: 6, name: 'Chicken Fillet', price: 265.00),
-    FoodItem(itemDbId: 51, categoryId: 6, name: 'Lumpiang Shanghai', price: 230.00),
-    FoodItem(itemDbId: 52, categoryId: 6, name: 'Torta Con Karne', price: 205.00),
-
-    // Category 7: Sizzling
     FoodItem(itemDbId: 53, categoryId: 7, name: 'Sizzling Chicken', price: 375.00),
-    FoodItem(itemDbId: 54, categoryId: 7, name: 'Sizzling Pork Sisig', price: 250.00),
-    FoodItem(itemDbId: 55, categoryId: 7, name: 'Sizzling Pusit', price: 225.00),
-    FoodItem(itemDbId: 56, categoryId: 7, name: 'Sizzling Mixed Seafoods', price: 295.00),
-    FoodItem(itemDbId: 57, categoryId: 7, name: 'Sizzling Hungarian Sausage', price: 225.00),
-
-    // Category 8: Pika Pika
     FoodItem(itemDbId: 58, categoryId: 8, name: 'French Fries', price: 115.00),
-    FoodItem(itemDbId: 59, categoryId: 8, name: 'Mojos', price: 115.00),
-    FoodItem(itemDbId: 60, categoryId: 8, name: 'Crispy Kangkong', price: 125.00),
-    FoodItem(itemDbId: 61, categoryId: 8, name: 'Calamares', price: 170.00),
-    FoodItem(itemDbId: 62, categoryId: 8, name: 'Nachos', price: 185.00),
-    FoodItem(itemDbId: 63, categoryId: 8, name: 'Tofu Square', price: 135.00),
-    FoodItem(itemDbId: 64, categoryId: 8, name: 'Shrimp Tempura', price: 395.00),
-    FoodItem(itemDbId: 135, categoryId: 8, name: 'Balai Silayan Salad', price: 239.00),
-    FoodItem(itemDbId: 136, categoryId: 8, name: 'Chef Lee Salad', price: 259.00),
-    FoodItem(itemDbId: 137, categoryId: 8, name: 'Bulgogi Quesadilla', price: 219.00),
-    FoodItem(itemDbId: 138, categoryId: 8, name: 'Chicken Quesadilla', price: 219.00),
-    FoodItem(itemDbId: 139, categoryId: 8, name: 'Chaofan with Mandu', price: 129.00),
-    FoodItem(itemDbId: 140, categoryId: 8, name: 'Rice Topped Korean Curry', price: 149.00),
-    FoodItem(itemDbId: 141, categoryId: 8, name: 'Loaded Nachos', price: 229.00),
-
-    // Category 9: Budget Meals W/ Rice
     FoodItem(itemDbId: 65, categoryId: 9, name: 'Tapsilog', price: 145.00),
-    FoodItem(itemDbId: 66, categoryId: 9, name: 'Tocilog', price: 145.00),
-    FoodItem(itemDbId: 67, categoryId: 9, name: 'Porksilog', price: 145.00),
-    FoodItem(itemDbId: 68, categoryId: 9, name: 'Hotsilog', price: 135.00),
-    FoodItem(itemDbId: 69, categoryId: 9, name: 'Hungariansilog', price: 145.00),
-    FoodItem(itemDbId: 70, categoryId: 9, name: 'Chicksilog', price: 145.00),
-    FoodItem(itemDbId: 71, categoryId: 9, name: 'Breaded Pork W/ Rice & Veg.', price: 165.00),
-    FoodItem(itemDbId: 72, categoryId: 9, name: 'Chicken Fillet W/ Rice', price: 155.00),
-    FoodItem(itemDbId: 73, categoryId: 9, name: 'Fish Fillet W/ Rice & Veg.', price: 165.00),
-    FoodItem(itemDbId: 74, categoryId: 9, name: 'Chicken Adobo W/ Egg', price: 145.00),
-    FoodItem(itemDbId: 75, categoryId: 9, name: 'Pork Adobo W/ Egg', price: 165.00),
-    FoodItem(itemDbId: 76, categoryId: 9, name: 'Burger Steak W/ Rice', price: 165.00),
-
-    // Category 10: Pizza
     FoodItem(itemDbId: 77, categoryId: 10, name: 'Super Supreme', price: 335.00),
-    FoodItem(itemDbId: 78, categoryId: 10, name: 'Bulgogi Pizza', price: 300.00),
-    FoodItem(itemDbId: 79, categoryId: 10, name: 'Sisig Pizza', price: 250.00),
-    FoodItem(itemDbId: 80, categoryId: 10, name: 'Ham N’ Cheese', price: 200.00),
-    FoodItem(itemDbId: 81, categoryId: 10, name: 'Hawaiian', price: 200.00),
-    FoodItem(itemDbId: 82, categoryId: 10, name: 'Pepperoni', price: 200.00),
-    FoodItem(itemDbId: 83, categoryId: 10, name: 'Bacon N’ Mushroom', price: 200.00),
-
-    // Category 11: Drinks
     FoodItem(itemDbId: 84, categoryId: 11, name: 'Bottled Water', price: 25.00),
-    FoodItem(itemDbId: 85, categoryId: 11, name: 'Mango Juice in Can', price: 75.00),
-    FoodItem(itemDbId: 86, categoryId: 11, name: 'Pineapple Juice in Can', price: 75.00),
-    FoodItem(itemDbId: 87, categoryId: 11, name: 'Orange Juice in Can', price: 75.00),
-    FoodItem(itemDbId: 88, categoryId: 11, name: 'Four Seasons in Can', price: 75.00),
-    FoodItem(itemDbId: 89, categoryId: 11, name: 'Iced Tea (Solo)', price: 50.00),
-    FoodItem(itemDbId: 90, categoryId: 11, name: 'Iced Tea (Pitcher)', price: 150.00),
-    FoodItem(itemDbId: 91, categoryId: 11, name: 'Blue Lemonade (Solo)', price: 50.00),
-    FoodItem(itemDbId: 92, categoryId: 11, name: 'Blue Lemonade (Pitcher)', price: 150.00),
-    FoodItem(itemDbId: 93, categoryId: 11, name: 'Cucumber (Solo)', price: 50.00),
-    FoodItem(itemDbId: 94, categoryId: 11, name: 'Cucumber (Pitcher)', price: 150.00),
-    FoodItem(itemDbId: 95, categoryId: 11, name: 'Coke (Mismo)', price: 30.00),
-    FoodItem(itemDbId: 96, categoryId: 11, name: 'Coke (1.5 Litro)', price: 110.00),
-    FoodItem(itemDbId: 97, categoryId: 11, name: 'Royal (Mismo)', price: 30.00),
-    FoodItem(itemDbId: 98, categoryId: 11, name: 'Royal (1.5 Litro)', price: 110.00),
-    FoodItem(itemDbId: 99, categoryId: 11, name: 'Sprite (Mismo)', price: 30.00),
-    FoodItem(itemDbId: 100, categoryId: 11, name: 'Sprite (1.5 Litro)', price: 110.00),
-    FoodItem(itemDbId: 101, categoryId: 11, name: 'San Mig Pale Pilsen', price: 65.00),
-    FoodItem(itemDbId: 102, categoryId: 11, name: 'San Mig Light', price: 65.00),
-    FoodItem(itemDbId: 103, categoryId: 11, name: 'San Mig Apple', price: 65.00),
-    FoodItem(itemDbId: 104, categoryId: 11, name: 'Grande', price: 150.00),
-    FoodItem(itemDbId: 105, categoryId: 11, name: 'Mucho', price: 150.00),
-
-    // Category 12: Rice
     FoodItem(itemDbId: 106, categoryId: 12, name: 'Plain Rice (Solo)', price: 25.00),
-    FoodItem(itemDbId: 107, categoryId: 12, name: 'Plain Rice (Bowl)', price: 100.00),
-    FoodItem(itemDbId: 108, categoryId: 12, name: 'Fried Rice (Solo)', price: 35.00),
-    FoodItem(itemDbId: 109, categoryId: 12, name: 'Fried Rice (Bowl)', price: 150.00),
-    FoodItem(itemDbId: 110, categoryId: 12, name: 'Shanghai Rice (Solo)', price: 40.00),
-    FoodItem(itemDbId: 111, categoryId: 12, name: 'Shanghai Rice (Bowl)', price: 160.00),
-    FoodItem(itemDbId: 112, categoryId: 12, name: 'Java Rice (Solo)', price: 40.00),
-    FoodItem(itemDbId: 113, categoryId: 12, name: 'Java Rice (Bowl)', price: 160.00),
-
-    // Category 13: Desserts
     FoodItem(itemDbId: 114, categoryId: 13, name: 'Halo-Halo', price: 80.00),
-    FoodItem(itemDbId: 115, categoryId: 13, name: 'Korean Ice Cream', price: 50.00),
-    FoodItem(itemDbId: 116, categoryId: 13, name: 'Leche Flan', price: 95.00),
-    FoodItem(itemDbId: 149, categoryId: 13, name: 'Samanco - Red Bean', price: 85.00),
-    FoodItem(itemDbId: 150, categoryId: 13, name: 'Samanco - Chocolate', price: 85.00),
-    FoodItem(itemDbId: 151, categoryId: 13, name: 'Samanco - Strawberry', price: 85.00),
-    FoodItem(itemDbId: 152, categoryId: 13, name: 'Samanco - Matcha', price: 85.00),
-
-    // Category 14: Korean Menu
     FoodItem(itemDbId: 117, categoryId: 14, name: 'Bibimbap', price: 180.00),
-    FoodItem(itemDbId: 118, categoryId: 14, name: 'Jjajangmyeon', price: 240.00),
-    FoodItem(itemDbId: 119, categoryId: 14, name: 'Tangsuyuk', price: 275.00),
-    FoodItem(itemDbId: 120, categoryId: 14, name: 'Kangpunggu', price: 275.00),
-    FoodItem(itemDbId: 121, categoryId: 14, name: 'Dakgangjung', price: 275.00),
-    FoodItem(itemDbId: 122, categoryId: 14, name: 'Kimchi Bokumbap', price: 100.00),
-    FoodItem(itemDbId: 123, categoryId: 14, name: 'Mandu', price: 135.00),
-    FoodItem(itemDbId: 124, categoryId: 14, name: 'Kimbap', price: 150.00),
-    FoodItem(itemDbId: 125, categoryId: 14, name: 'Kimchi (Tub)', price: 200.00),
-    FoodItem(itemDbId: 126, categoryId: 14, name: 'Dakgalbi W/ Cheese', price: 335.00),
-    FoodItem(itemDbId: 127, categoryId: 14, name: 'Yaki Udon', price: 180.00),
-    FoodItem(itemDbId: 128, categoryId: 14, name: 'Tteokbokki', price: 210.00),
-    FoodItem(itemDbId: 129, categoryId: 14, name: 'Rabokki', price: 245.00),
-    FoodItem(itemDbId: 130, categoryId: 14, name: 'Japchae', price: 185.00),
-    FoodItem(itemDbId: 131, categoryId: 14, name: 'Bulgogi (Korean)', price: 275.00),
-    FoodItem(itemDbId: 132, categoryId: 14, name: 'Ramyeon', price: 90.00),
-    FoodItem(itemDbId: 133, categoryId: 14, name: 'Bossam', price: 475.00),
-    FoodItem(itemDbId: 147, categoryId: 14, name: 'Eomuk-Udon', price: 280.00),
-    FoodItem(itemDbId: 148, categoryId: 14, name: 'Tonkotsu Pork Ramen', price: 280.00),
   ];
 
   final List<MenuCategory> _categoriesFallback = [
+    MenuCategory(id: 0, name: "All Orders"),
     MenuCategory(id: 1, name: "Pancit"),
     MenuCategory(id: 2, name: "Pasta"),
     MenuCategory(id: 3, name: "Sandwiches"),
@@ -277,9 +118,6 @@ class _MenuScreenState extends State<MenuScreen> {
     MenuCategory(id: 12, name: "Rice"),
     MenuCategory(id: 13, name: "Desserts"),
     MenuCategory(id: 14, name: "Korean Menu"),
-    MenuCategory(id: 15, name: "Burgers"),
-    MenuCategory(id: 16, name: "New Menu"),
-    MenuCategory(id: 17, name: "Italian"),
   ];
 
   List<MenuCategory> _categoriesList = [];
@@ -289,27 +127,56 @@ class _MenuScreenState extends State<MenuScreen> {
     super.initState();
     if (widget.tableNumber != null) {
       _chosenTableNumber = widget.tableNumber;
+      UserSession.activeTableNumber = widget.tableNumber;
     } else if (widget.tableId != null) {
       _chosenTableNumber = widget.tableId;
+      UserSession.activeTableId = widget.tableId;
+    } else if (UserSession.activeTableNumber != null) {
+      _chosenTableNumber = UserSession.activeTableNumber;
+    } else if (UserSession.activeTableId != null) {
+      _chosenTableNumber = UserSession.activeTableId;
     }
-    _fetchCategoriesFromBackend();
+
+    // Strict control para sa New Order vs Additional Order
+    UserSession.isAdditionalOrder = widget.isAdditionalOrder;
+    if (!widget.isAdditionalOrder) {
+      UserSession.targetParentOrderId = null;
+    }
+
     _fetchLiveDatabaseMenu();
+    _syncExistingOrdersForTable();
   }
 
-  Future<void> _fetchCategoriesFromBackend() async {
+  Future<void> _syncExistingOrdersForTable() async {
+    final int tableId = _chosenTableNumber ?? 7;
     try {
-      final response = await http.get(Uri.parse('http://localhost:5000/api/v1/categories'));
+      final response = await http.get(
+        Uri.parse('http://localhost:5000/api/v1/orders/unfinished?table_id=$tableId'),
+      );
       if (response.statusCode == 200) {
-        final Map<String, dynamic> decodedData = jsonDecode(response.body);
-        final List list = decodedData['data'] ?? [];
-        if (list.isNotEmpty && mounted) {
-          setState(() {
-            _categoriesList = list.map((item) => MenuCategory.fromJson(item)).toList();
-          });
-          return;
+        final data = jsonDecode(response.body);
+        final List ordersList = data['orders'] ?? data['data'] ?? [];
+        if (ordersList.isNotEmpty) {
+          final firstOrder = ordersList.first;
+          final rawSessionId = firstOrder['session_id'];
+          if (rawSessionId != null) {
+            UserSession.activeSessionId = int.tryParse(rawSessionId.toString());
+            UserSession.sessionId = rawSessionId.toString();
+          }
+
+          if (widget.isAdditionalOrder) {
+            final rawId = firstOrder['id'] ?? firstOrder['order_id'];
+            if (rawId != null) {
+              UserSession.firstOrderId = int.tryParse(rawId.toString());
+              UserSession.targetParentOrderId ??= rawId.toString();
+            }
+          } else {
+            UserSession.targetParentOrderId = null;
+          }
         }
       }
     } catch (_) {}
+
     if (mounted) {
       setState(() {
         _categoriesList = _categoriesFallback;
@@ -319,12 +186,16 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<void> _fetchLiveDatabaseMenu() async {
     try {
-      final response = await http.get(Uri.parse('http://localhost:5000/api/v1/menu'));
+      final response = await http.get(
+        Uri.parse('http://localhost:5000/api/v1/menu'),
+      );
       if (response.statusCode == 200) {
         final Map<String, dynamic> decodedData = jsonDecode(response.body);
         final List menuList = decodedData['data'] ?? [];
         setState(() {
-          _menuRepository = menuList.map((item) => FoodItem.fromJson(item)).toList();
+          _menuRepository = menuList
+              .map((item) => FoodItem.fromJson(item))
+              .toList();
           _isLoading = false;
         });
       } else {
@@ -353,11 +224,16 @@ class _MenuScreenState extends State<MenuScreen> {
     });
   }
 
-  double get _cartGrandTotal => _orderCart.entries.fold(0.0, (total, entry) => total + (entry.key.price * entry.value));
+  double get _cartGrandTotal => _orderCart.entries.fold(
+    0.0,
+        (total, entry) => total + (entry.key.price * entry.value),
+  );
 
   Future<List<Map<String, dynamic>>> _fetchTableStatuses() async {
     try {
-      final response = await http.get(Uri.parse('http://localhost:5000/api/v1/tables'));
+      final response = await http.get(
+        Uri.parse('http://localhost:5000/api/v1/tables'),
+      );
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
         final List<dynamic> list = resData['data'] ?? [];
@@ -591,6 +467,7 @@ class _MenuScreenState extends State<MenuScreen> {
                               total: _cartGrandTotal,
                               tableId: _chosenTableNumber,
                               isTakeout: _isTakeoutSelected,
+                              isAdditionalOrder: widget.isAdditionalOrder || UserSession.isAdditionalOrder,
                             ),
                           ),
                         );
@@ -613,7 +490,7 @@ class _MenuScreenState extends State<MenuScreen> {
     final currentCategoryName = activeCategories.firstWhere((c) => c.id == _selectedCategoryId, orElse: () => activeCategories.first).name;
 
     final filteredItems = _menuRepository.where((item) {
-      final matchesCategory = item.categoryId == _selectedCategoryId;
+      final matchesCategory = _selectedCategoryId == 0 || item.categoryId == _selectedCategoryId;
       final matchesSearch = _searchQuery.isEmpty || item.name.toLowerCase().contains(_searchQuery.toLowerCase());
       return matchesCategory && matchesSearch;
     }).toList();
@@ -713,6 +590,11 @@ class _MenuScreenState extends State<MenuScreen> {
                 icon: const Icon(Icons.qr_code_scanner, color: Color(0xFF203F35), size: 22),
                 tooltip: 'Scan Table QR',
                 onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const QrScannerScreen())),
+              ),
+              IconButton(
+                icon: const Icon(Icons.point_of_sale_outlined, color: Color(0xFF203F35), size: 22),
+                tooltip: 'Cashier Station',
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => OrdersScreen(cartItems: []))),
               ),
               IconButton(
                 icon: const Icon(Icons.person_pin_outlined, color: Color(0xFF203F35), size: 22),
@@ -961,142 +843,139 @@ class _MenuScreenState extends State<MenuScreen> {
               border: Border.all(color: const Color(0xFFE5DFD3)),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.02),
+                  color: Colors.black.withOpacity(0.02),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
               ],
             ),
             child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Product Image Header
-              Container(
-                height: 118,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEEE7D9),
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-                ),
-                child: Stack(
-                  children: [
-                    Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(_getCategoryIcon(foodItem.categoryId), size: 36, color: const Color(0xFF203F35)),
-                          const SizedBox(height: 4),
-                          Text(
-                            foodItem.name.substring(0, 1),
-                            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFFA47C3D)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // Product Details
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 118,
+                  width: double.infinity,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFEEE7D9),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+                  ),
+                  child: Stack(
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            foodItem.name,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF24382F)),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _getCategoryName(foodItem.categoryId),
-                            style: const TextStyle(fontSize: 10, color: Color(0xFF788078)),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            available ? 'In Stock' : 'Sold Out',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w500,
-                              color: available ? const Color(0xFF53766C) : const Color(0xFF8E5136),
+                      Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(_getCategoryIcon(foodItem.categoryId), size: 36, color: const Color(0xFF203F35)),
+                            const SizedBox(height: 4),
+                            Text(
+                              foodItem.name.isNotEmpty ? foodItem.name.substring(0, 1) : 'D',
+                              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFFA47C3D)),
                             ),
-                          ),
-                        ],
-                      ),
-                      // Price and Add Action
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            '₱${foodItem.price.toStringAsFixed(2)}',
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF203F35)),
-                          ),
-                          !available
-                              ? Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFD9DBD3),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Text('Off', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF788078))),
-                          )
-                              : productCount == 0
-                              ? InkWell(
-                            onTap: () => _modifyQuantity(foodItem, 1),
-                            borderRadius: BorderRadius.circular(10),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF203F35),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Text('Add', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
-                            ),
-                          )
-                              : Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF203F35),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Row(
-                              children: [
-                                InkWell(
-                                  onTap: () => _modifyQuantity(foodItem, -1),
-                                  child: const Padding(
-                                    padding: EdgeInsets.all(4.0),
-                                    child: Icon(Icons.remove, size: 14, color: Colors.white),
-                                  ),
-                                ),
-                                Text('$productCount', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
-                                InkWell(
-                                  onTap: () => _modifyQuantity(foodItem, 1),
-                                  child: const Padding(
-                                    padding: EdgeInsets.all(4.0),
-                                    child: Icon(Icons.add, size: 14, color: Colors.white),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
                 ),
-              ),
-            ],
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              foodItem.name,
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF24382F)),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _getCategoryName(foodItem.categoryId),
+                              style: const TextStyle(fontSize: 10, color: Color(0xFF788078)),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              available ? 'In Stock' : 'Sold Out',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                                color: available ? const Color(0xFF53766C) : const Color(0xFF8E5136),
+                              ),
+                            ),
+                          ],
+                        ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              '₱${foodItem.price.toStringAsFixed(2)}',
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF203F35)),
+                            ),
+                            !available
+                                ? Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFD9DBD3),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Text('Off', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF788078))),
+                            )
+                                : productCount == 0
+                                ? InkWell(
+                              onTap: () => _modifyQuantity(foodItem, 1),
+                              borderRadius: BorderRadius.circular(10),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF203F35),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Text('Add', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                              ),
+                            )
+                                : Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF203F35),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Row(
+                                children: [
+                                  InkWell(
+                                    onTap: () => _modifyQuantity(foodItem, -1),
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(4.0),
+                                      child: Icon(Icons.remove, size: 14, color: Colors.white),
+                                    ),
+                                  ),
+                                  Text('$productCount', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+                                  InkWell(
+                                    onTap: () => _modifyQuantity(foodItem, 1),
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(4.0),
+                                      child: Icon(Icons.add, size: 14, color: Colors.white),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      );
-    },
-  );
-}
+        );
+      },
+    );
+  }
 
   IconData _getCategoryIcon(int catId) {
     switch (catId) {
@@ -1162,6 +1041,7 @@ class _MenuScreenState extends State<MenuScreen> {
                         total: _cartGrandTotal,
                         tableId: _chosenTableNumber,
                         isTakeout: _isTakeoutSelected,
+                        isAdditionalOrder: widget.isAdditionalOrder,
                       ),
                     ),
                   );
@@ -1207,15 +1087,23 @@ class _MenuScreenState extends State<MenuScreen> {
                       total: _cartGrandTotal,
                       tableId: _chosenTableNumber,
                       isTakeout: _isTakeoutSelected,
+                      isAdditionalOrder: widget.isAdditionalOrder,
                     ),
                   ),
                 );
               }),
-              _buildNavItem(Icons.receipt_long_outlined, 'Orders', onTap: () {
-                Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: 1042, isTakeout: _isTakeoutSelected, tableId: _chosenTableNumber)));
-              }),
-              _buildNavItem(Icons.notifications_none, 'Help', onTap: () {
-                Navigator.push(context, MaterialPageRoute(builder: (context) => const AssistanceScreen()));
+              _buildNavItem(Icons.track_changes, 'Live Status', onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => OrderStatusScreen(
+                      orderId: UserSession.lastPlacedOrderId ?? 1042,
+                      isTakeout: _isTakeoutSelected,
+                      tableId: _chosenTableNumber,
+                      isAdditionalOrder: widget.isAdditionalOrder,
+                    ),
+                  ),
+                );
               }),
               _buildNavItem(Icons.account_balance_wallet_outlined, 'Pay', onTap: () {
                 Navigator.push(

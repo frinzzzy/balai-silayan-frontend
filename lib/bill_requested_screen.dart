@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
+import 'user_session.dart';
 
 class BillRequestedScreen extends StatefulWidget {
   final int? tableId;
@@ -14,11 +13,11 @@ class BillRequestedScreen extends StatefulWidget {
 
   const BillRequestedScreen({
     super.key,
-    this.tableId = 7,
+    this.tableId,
     this.isTakeout = false,
-    this.totalAmount = 1255.0,
-    this.foodDrinksTotal = 1165.0,
-    this.addOnsTotal = 90.0,
+    this.totalAmount = 0.0,
+    this.foodDrinksTotal = 0.0,
+    this.addOnsTotal = 0.0,
   });
 
   @override
@@ -35,7 +34,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final int tableNum = widget.tableId ?? 7;
+    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
     final String tableString = widget.isTakeout ? 'Takeout' : 'Table ${tableNum.toString().padLeft(2, '0')}';
 
     return Scaffold(
@@ -70,7 +69,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: _buildCustomerBottomNav(),
+      bottomNavigationBar: _buildCustomerBottomNav(tableNum),
     );
   }
 
@@ -181,9 +180,9 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
   }
 
   Widget _buildIntroductionHeader() {
-    return Column(
+    return const Column(
       children: [
-        const Text(
+        Text(
           'BILL REQUESTED',
           style: TextStyle(
             fontSize: 10,
@@ -192,8 +191,8 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             letterSpacing: 1.2,
           ),
         ),
-        const SizedBox(height: 6),
-        const Text(
+        SizedBox(height: 6),
+        Text(
           'Bill is on the way.',
           textAlign: TextAlign.center,
           style: TextStyle(
@@ -203,8 +202,8 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             height: 1.2,
           ),
         ),
-        const SizedBox(height: 10),
-        const Text(
+        SizedBox(height: 10),
+        Text(
           'Salamat! Our staff has been notified to prepare your official receipt or collect payment.',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 13, color: Color(0xFF788078), height: 1.4),
@@ -338,7 +337,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
     );
   }
 
-  Widget _buildCustomerBottomNav() {
+  Widget _buildCustomerBottomNav(int tableNum) {
     return Container(
       height: 70,
       decoration: const BoxDecoration(
@@ -351,11 +350,18 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
           _buildNavItem(Icons.restaurant, 'Menu', onTap: () {
             Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen()));
           }),
-          _buildNavItem(Icons.receipt_long_outlined, 'Orders', onTap: () {
-            Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: 1042, isTakeout: widget.isTakeout, tableId: widget.tableId)));
-          }),
-          _buildNavItem(Icons.notifications_none, 'Help', onTap: () {
-            Navigator.push(context, MaterialPageRoute(builder: (context) => const AssistanceScreen()));
+          _buildNavItem(Icons.track_changes, 'Live Status', onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => OrderStatusScreen(
+                  orderId: UserSession.lastPlacedOrderId ?? 1042,
+                  isTakeout: widget.isTakeout,
+                  tableId: tableNum,
+                  isAdditionalOrder: UserSession.isAdditionalOrder,
+                ),
+              ),
+            );
           }),
           _buildNavItem(Icons.account_balance_wallet, 'Pay', isActive: true, onTap: () {}),
         ],

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:image_picker/image_picker.dart';
 import 'order_type_selection_screen.dart';
+import 'user_session.dart'; // import your new session file
+
 
 class QrScannerScreen extends StatefulWidget {
   const QrScannerScreen({super.key});
@@ -25,46 +27,51 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
     if (_isProcessing) return;
     setState(() => _isProcessing = true);
 
-    int scannedTableId = 7;
-    int scannedTableNumber = 7;
+    int scannedTableId = 1;
+    int scannedTableNumber = 1;
     String? qrToken;
 
-    if (scannedValue.contains('/scan/')) {
-      qrToken = scannedValue.split('/scan/').last;
-    } else if (scannedValue.contains('/table/')) {
-      final lastSegment = Uri.parse(scannedValue).pathSegments.last;
-      final parsed = int.tryParse(lastSegment);
+    final String cleanVal = scannedValue.trim();
 
-      if (parsed != null) {
+    // 1. Try extracting consecutive numbers (e.g., "TABLE-12", "table/05", "15")
+    final RegExp digitRegExp = RegExp(r'\d+');
+    final match = digitRegExp.firstMatch(cleanVal);
+
+    if (match != null) {
+      final parsed = int.tryParse(match.group(0)!);
+      if (parsed != null && parsed > 0) {
         scannedTableId = parsed;
         scannedTableNumber = parsed;
-      }
-    } else {
-      final sanitized = scannedValue.replaceAll('TABLE-', '').trim();
-      final parsed = int.tryParse(sanitized);
-
-      if (parsed != null) {
-        scannedTableId = parsed;
-        scannedTableNumber = parsed;
-      } else {
-        qrToken = scannedValue;
       }
     }
 
+    // 2. Extract QR token if present
+    if (cleanVal.contains('/scan/')) {
+      qrToken = cleanVal.split('/scan/').last;
+    } else if (!cleanVal.toLowerCase().contains('table')) {
+      qrToken = cleanVal;
+    }
+
+    // 3. Save directly to UserSession state so table ID persists across all screens
+    UserSession.activeTableId = scannedTableId;
+    UserSession.activeTableNumber = scannedTableNumber;
+    UserSession.qrToken = qrToken;
+
     _scannerController.stop();
 
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (context) => OrderTypeSelectionScreen(
-          tableId: scannedTableId,
-          tableNumber: scannedTableNumber,
-          qrToken: qrToken,
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => OrderTypeSelectionScreen(
+            tableId: scannedTableId,
+            tableNumber: scannedTableNumber,
+            qrToken: qrToken,
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
-
   void _promptManualQrCodeEntry() {
     final TextEditingController tokenController = TextEditingController();
     showDialog(

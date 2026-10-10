@@ -1,15 +1,26 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+
 import 'order_status_screen.dart';
+import 'menu_screen.dart';
+import 'user_session.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final Map<dynamic, int> cart;
   final double total;
   final int? tableId;
   final bool isTakeout;
-
-  const CheckoutScreen({super.key, required this.cart, required this.total, this.tableId, required this.isTakeout});
+  final bool isAdditionalOrder;
+  const CheckoutScreen({
+    super.key,
+    required this.cart,
+    required this.total,
+    this.tableId = 7,
+    required this.isTakeout,
+    this.isAdditionalOrder = false,
+  });
 
   @override
   State<CheckoutScreen> createState() => _CheckoutScreenState();
@@ -20,17 +31,49 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   late Map<dynamic, int> _editableCart;
   late double _calculatedTotal;
 
+
   @override
   void initState() {
     super.initState();
     _editableCart = Map.from(widget.cart);
-    _calculatedTotal = widget.total;
+    _calculatedTotal = _calculateCartTotal();
+  }
+
+  // Helper para gumawa ng valid UUID v4 nang walang kailangang panlabas na package
+  String _generateUuidV4() {
+    final Random random = Random();
+    final bytes = List<int>.generate(16, (i) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 1
+
+    String hex(int byte) => byte.toRadixString(16).padLeft(2, '0');
+
+    return '${hex(bytes[0])}${hex(bytes[1])}${hex(bytes[2])}${hex(bytes[3])}-'
+        '${hex(bytes[4])}${hex(bytes[5])}-'
+        '${hex(bytes[6])}${hex(bytes[7])}-'
+        '${hex(bytes[8])}${hex(bytes[9])}-'
+        '${hex(bytes[10])}${hex(bytes[11])}${hex(bytes[12])}${hex(bytes[13])}${hex(bytes[14])}${hex(bytes[15])}';
+  }
+
+  double _getItemPrice(dynamic item) {
+    if (item is FoodItem) return item.price;
+    if (item is Map) {
+      final dynamic price = item['price'];
+      if (price is num) return price.toDouble();
+      return double.tryParse(price?.toString() ?? '') ?? 0.0;
+    }
+    return 0.0;
+  }
+
+  double _calculateCartTotal() {
+    return _editableCart.entries.fold(
+      0.0,
+          (sum, entry) => sum + (_getItemPrice(entry.key) * entry.value),
+    );
   }
 
   void _recalculatePipeline() {
-    setState(() {
-      _calculatedTotal = _editableCart.entries.fold(0.0, (sum, entry) => sum + (entry.key.price * entry.value));
-    });
+    _calculatedTotal = _calculateCartTotal();
   }
 
   void _updateQuantity(dynamic item, int variance) {
@@ -45,51 +88,177 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     });
   }
 
-  Future<void> _commitOrderPipelineToBackend() async {
-    if (_editableCart.isEmpty) return;
+  Future<void> _submitOrderToBackend() async {
+    if (_editableCart.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Your basket is empty. Please select food items first.',
+          ),
+          backgroundColor: Color(0xFF8E5136),
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSubmitting = true);
 
-    final List<Map<String, dynamic>> orderItemsPayload = _editableCart.entries.map((entry) {
-      return {"menu_item_id": entry.key.itemDbId, "quantity": entry.value, "unit_price": entry.key.price};
+    final int targetTableId = widget.isTakeout ? 1 : (widget.tableId ?? UserSession.activeTableId ?? 7);
+
+    // Format dynamic order items payload for Express / PostgreSQL backend
+    final List<Map<String, dynamic>> orderItemsPayload = _editableCart.entries
+        .map((entry) {
+      final item = entry.key;
+      final qty = entry.value;
+      final int menuItemId = (item is FoodItem)
+          ? item.itemDbId
+          : (item['id'] ?? item['menu_item_id'] ?? 1);
+      final double price = (item is FoodItem)
+          ? item.price
+          : (double.tryParse(item['price']?.toString() ?? '0') ?? 0.0);
+
+      return {
+        "menu_item_id": menuItemId,
+        "quantity": qty,
+        "unit_price": price,
+        "addons": [],
+      };
     }).toList();
 
+    // Dito ginagamit ang native UUID v4 generator para tugma sa database schema
+    final String idempotencyKey = _generateUuidV4();
+
+    // MAAYOS NA PAGKUHA NG SESSION ID
+    final int? targetSessionId = UserSession.activeSessionId ??
+        int.tryParse(UserSession.sessionId ?? '');
+
+    // STRICT FIX: Huwag nang i-fallback sa global UserSession. Sundin nang eksakto si widget.isAdditionalOrder!
+    final bool isAdditional = widget.isAdditionalOrder;
+    int? parsedParentOrderId;
+    if (isAdditional && UserSession.targetParentOrderId != null) {
+      parsedParentOrderId = int.tryParse(UserSession.targetParentOrderId.toString());
+    }
+
+    // Safety guard: Kung wala namang valid parent order ID, i-fallback sa bagong order para hindi mag-error ang backend
+    final bool safeIsAdditional = isAdditional && parsedParentOrderId != null;
+    final dynamic finalParentId = safeIsAdditional ? parsedParentOrderId : null;
+
     final Map<String, dynamic> transactionBody = {
-      "table_id": widget.isTakeout ? 1 : (widget.tableId ?? 1),
+      "table_id": targetTableId,
+      "session_id": targetSessionId,
+      "parent_order_id": finalParentId,
+      "is_additional_order": safeIsAdditional,
       "items": orderItemsPayload,
       "grand_total": _calculatedTotal,
+      "client_order_id": idempotencyKey,
       "timestamp": DateTime.now().toIso8601String(),
     };
 
-    final String idempotencyKey = "order_${DateTime.now().millisecondsSinceEpoch}";
-
     try {
+      debugPrint('--- DEBUG TRANSACTION BODY ---');
+      debugPrint('Is Additional: $isAdditional');
+      debugPrint('Target Parent Order ID: $finalParentId');
+      debugPrint('Session ID: $targetSessionId');
+      debugPrint('Table ID: $targetTableId');
+      debugPrint('Transaction Body: ${jsonEncode(transactionBody)}');
+
+      final Map<String, String> reqHeaders = {
+        "Content-Type": "application/json",
+        "x-idempotency-key": idempotencyKey,
+      };
+
+      if (UserSession.customerSessionToken != null &&
+          UserSession.customerSessionToken!.isNotEmpty) {
+        reqHeaders["Authorization"] = "Bearer ${UserSession.customerSessionToken}";
+      }
+
       final response = await http.post(
         Uri.parse('http://localhost:5000/api/v1/orders'),
-        headers: {
-          "Content-Type": "application/json",
-          "x-idempotency-key": idempotencyKey,
-        },
+        headers: reqHeaders,
         body: jsonEncode(transactionBody),
       );
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         final Map<String, dynamic> responseData = jsonDecode(response.body);
-        final int generatedOrderId = responseData['data']?['order']?['id'] ?? responseData['data']?['id'] ?? responseData['data']?['order_id'] ?? 1042;
-        _navigateToStatusTracking(generatedOrderId);
+        final dynamic createdOrderData =
+            responseData['data']?['order'] ?? responseData['data'];
+        final dynamic generatedOrderId =
+            createdOrderData?['id'] ??
+                createdOrderData?['order_id'] ??
+                DateTime.now().millisecondsSinceEpoch;
+
+        int? sanitizedOrderId = int.tryParse(generatedOrderId?.toString() ?? '');
+
+        final double? sessionTotal = double.tryParse(
+          createdOrderData?['total_amount']?.toString() ?? '',
+        );
+        if (sessionTotal != null && sessionTotal > 0.0) {
+          _calculatedTotal = sessionTotal;
+        }
+        final dynamic responseItems =
+            responseData['data']?['items'] ?? createdOrderData?['items'];
+        final List<dynamic>? initialOrderItems = responseItems is List
+            ? List<dynamic>.from(responseItems)
+            : null;
+
+        // I-save ang root order ID kung wala pa at kung New Order ang ginawa
+        if (!isAdditional && UserSession.firstOrderId == null && sanitizedOrderId != null) {
+          UserSession.firstOrderId = sanitizedOrderId;
+        }
+
+        UserSession.lastPlacedOrderId = generatedOrderId;
+        UserSession.lastPlacedOrderTotal = _calculatedTotal;
+        UserSession.lastPlacedOrderItems = initialOrderItems ?? orderItemsPayload;
+
+        if (isAdditional) {
+          UserSession.targetParentOrderId = generatedOrderId?.toString();
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Order submitted successfully to kitchen!'),
+              backgroundColor: Color(0xFF203F35),
+            ),
+          );
+          _navigateToStatusTracking(
+            generatedOrderId,
+            initialOrderItems: initialOrderItems,
+          );
+        }
       } else {
-        _executeFallbackSimulation();
+        final dynamic errorBody = jsonDecode(response.body);
+        final String errorMessage = errorBody is Map
+            ? (errorBody['message']?.toString() ??
+            'Backend returned status code ${response.statusCode}')
+            : 'Backend returned status code ${response.statusCode}';
+        _handleOrderSubmissionError(errorMessage);
       }
     } catch (e) {
-      _executeFallbackSimulation();
+      _handleOrderSubmissionError('Connection error: $e');
     }
   }
 
-  void _executeFallbackSimulation() {
-    Future.delayed(const Duration(seconds: 1), () => _navigateToStatusTracking(1042));
+  void _handleOrderSubmissionError(String errorDetails) {
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Order was not submitted. $errorDetails'),
+        backgroundColor: const Color(0xFF203F35),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
-  void _navigateToStatusTracking(dynamic orderId) {
+  void _navigateToStatusTracking(
+      dynamic orderId, {
+        List<dynamic>? initialOrderItems,
+      }) {
+    if (!mounted) return;
     setState(() => _isSubmitting = false);
+
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(
@@ -98,9 +267,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           isTakeout: widget.isTakeout,
           tableId: widget.tableId,
           totalAmount: _calculatedTotal,
+          isAdditionalOrder: widget.isAdditionalOrder,
+          initialOrderItems: initialOrderItems,
         ),
       ),
-      (route) => route.isFirst,
+          (route) => route.isFirst,
     );
   }
 
@@ -108,79 +279,225 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
     final isDesktop = screenWidth > 800;
+    final int displayTableNum = widget.tableId ?? UserSession.activeTableNumber ?? 7;
+
+    // STRICT FIX: Huwag ding i-fallback sa global UserSession sa UI rendering
+    final bool isAdditional = widget.isAdditionalOrder;
+    final String? parentOrderId = isAdditional ? UserSession.targetParentOrderId : null;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F4EC),
       appBar: AppBar(
-        leading: IconButton(icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF203F35), size: 18), onPressed: () => Navigator.pop(context)),
-        title: const Text('Verify Order Details', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        leading: IconButton(
+          icon: const Icon(
+            Icons.arrow_back_ios_new,
+            color: Color(0xFF203F35),
+            size: 18,
+          ),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(
+          isAdditional ? 'Verify Additional Order' : 'Verify Order Details',
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF203F35),
+          ),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
       ),
       body: _isSubmitting
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF203F35)))
+          ? const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Color(0xFF203F35)),
+            SizedBox(height: 16),
+            Text(
+              'Submitting order to kitchen...',
+              style: TextStyle(
+                color: Color(0xFF203F35),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      )
           : Center(
         child: Container(
-          constraints: BoxConstraints(maxWidth: isDesktop ? 700 : double.infinity),
+          constraints: BoxConstraints(
+            maxWidth: isDesktop ? 700 : double.infinity,
+          ),
           child: Column(
             children: [
               Expanded(
                 child: _editableCart.isEmpty
-                    ? const Center(child: Text('Your basket is currently empty.'))
+                    ? const Center(
+                  child: Text(
+                    'Your basket is currently empty.',
+                    style: TextStyle(color: Color(0xFF788078)),
+                  ),
+                )
                     : ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
+                    // Dining Preference Banner
                     Container(
                       padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(color: const Color(0xFF203F35), borderRadius: BorderRadius.circular(16)),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF203F35),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                       child: Row(
                         children: [
-                          Icon(widget.isTakeout ? Icons.shopping_bag_outlined : Icons.table_restaurant_outlined, color: const Color(0xFFA47C3D)),
+                          Icon(
+                            widget.isTakeout
+                                ? Icons.shopping_bag_outlined
+                                : Icons.table_restaurant_outlined,
+                            color: const Color(0xFFA47C3D),
+                          ),
                           const SizedBox(width: 12),
-                          Text(
-                            widget.isTakeout ? 'Dining Preference: Takeout / To-Go' : 'Dining Preference: Dine-In (Table #${widget.tableId ?? 7})',
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          Expanded(
+                            child: Text(
+                              widget.isTakeout
+                                  ? 'Dining Preference: Takeout / To-Go'
+                                  : (isAdditional && parentOrderId != null
+                                  ? 'Additional Order for Table #${displayTableNum.toString().padLeft(2, '0')} (Main: $parentOrderId)'
+                                  : 'Dining Preference: Dine-In (Table #${displayTableNum.toString().padLeft(2, '0')})'),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                         ],
                       ),
                     ),
                     const SizedBox(height: 24),
-                    const Text('Basket Selection Summary', style: TextStyle(color: Color(0xFF788078), fontWeight: FontWeight.bold)),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Basket Selection Summary',
+                          style: TextStyle(
+                            color: Color(0xFF788078),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (isAdditional)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFA47C3D).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text(
+                              'ADD-ON',
+                              style: TextStyle(
+                                color: Color(0xFFA47C3D),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                     const SizedBox(height: 12),
+                    // Item Cards List
                     ..._editableCart.entries.map((entry) {
                       final item = entry.key;
                       final qty = entry.value;
+                      final String name = (item is FoodItem)
+                          ? item.name
+                          : (item['name'] ?? 'Dish Item');
+                      final double price = (item is FoodItem)
+                          ? item.price
+                          : (double.tryParse(
+                        item['price']?.toString() ?? '0',
+                      ) ??
+                          0.0);
+
                       return Card(
                         color: const Color(0xFFFFFDFA),
                         margin: const EdgeInsets.only(bottom: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Color(0xFFE5DFD3))),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: const BorderSide(
+                            color: Color(0xFFE5DFD3),
+                          ),
+                        ),
                         child: Padding(
                           padding: const EdgeInsets.all(12),
                           child: Row(
                             children: [
                               Container(
                                 padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(color: const Color(0xFFEEE7D9), borderRadius: BorderRadius.circular(12)),
-                                child: Text(item.name.substring(0, 1), style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEEE7D9),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  name.isNotEmpty ? name.substring(0, 1) : 'D',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF203F35),
+                                  ),
+                                ),
                               ),
                               const SizedBox(width: 14),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+                                    Text(
+                                      name,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF203F35),
+                                      ),
+                                    ),
                                     const SizedBox(height: 2),
-                                    Text('₱${item.price.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFA47C3D), fontSize: 12, fontWeight: FontWeight.bold)),
+                                    Text(
+                                      '₱${price.toStringAsFixed(2)} each',
+                                      style: const TextStyle(
+                                        color: Color(0xFFA47C3D),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
                               Row(
                                 children: [
-                                  IconButton(icon: const Icon(Icons.remove_circle_outline, size: 20, color: Color(0xFF203F35)), onPressed: () => _updateQuantity(item, -1)),
-                                  Text('$qty', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
-                                  IconButton(icon: const Icon(Icons.add_circle, color: Color(0xFF203F35), size: 20), onPressed: () => _updateQuantity(item, 1)),
+                                  IconButton(
+                                    icon: const Icon(
+                                      Icons.remove_circle_outline,
+                                      size: 20,
+                                      color: Color(0xFF203F35),
+                                    ),
+                                    onPressed: () => _updateQuantity(item, -1),
+                                  ),
+                                  Text(
+                                    '$qty',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF203F35),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(
+                                      Icons.add_circle,
+                                      color: Color(0xFF203F35),
+                                      size: 20,
+                                    ),
+                                    onPressed: () => _updateQuantity(item, 1),
+                                  ),
                                 ],
-                              )
+                              ),
                             ],
                           ),
                         ),
@@ -189,7 +506,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   ],
                 ),
               ),
-              if (_editableCart.isNotEmpty) _renderPaymentExecutionDrawer(),
+              if (_editableCart.isNotEmpty)
+                _renderPaymentExecutionDrawer(),
             ],
           ),
         ),
@@ -200,7 +518,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Widget _renderPaymentExecutionDrawer() {
     return Container(
       padding: const EdgeInsets.all(24),
-      decoration: const BoxDecoration(color: Color(0xFFFFFDFA), borderRadius: BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)), boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 16, offset: Offset(0, -4))]),
+      decoration: const BoxDecoration(
+        color: Color(0xFFFFFDFA),
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(24),
+          topRight: Radius.circular(24),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 16,
+            offset: Offset(0, -4),
+          ),
+        ],
+      ),
       child: SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -208,8 +539,21 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Order Total', style: TextStyle(color: Color(0xFF788078), fontWeight: FontWeight.bold)),
-                Text('₱${_calculatedTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Color(0xFF203F35))),
+                const Text(
+                  'Order Total',
+                  style: TextStyle(
+                    color: Color(0xFF788078),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  '₱${_calculatedTotal.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF203F35),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 20),
@@ -217,14 +561,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               width: double.infinity,
               height: 52,
               child: ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0),
-                onPressed: _commitOrderPipelineToBackend,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF203F35),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  elevation: 0,
+                ),
+                onPressed: _submitOrderToBackend,
                 child: const Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(Icons.check_circle_outline, color: Colors.white),
                     SizedBox(width: 8),
-                    Text('Place Order', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                    Text(
+                      'Place Order',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
                   ],
                 ),
               ),

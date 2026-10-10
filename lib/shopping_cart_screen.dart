@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'menu_screen.dart';
 import 'checkout_screen.dart';
 import 'assistance_screen.dart';
+import 'user_session.dart';
 
 class ShoppingCartScreen extends StatefulWidget {
   final Map<FoodItem, int> cart;
   final double total;
   final int? tableId;
   final bool isTakeout;
+  final bool isAdditionalOrder;
 
   const ShoppingCartScreen({
     super.key,
@@ -15,6 +20,7 @@ class ShoppingCartScreen extends StatefulWidget {
     required this.total,
     this.tableId = 7,
     this.isTakeout = false,
+    this.isAdditionalOrder = false,
   });
 
   @override
@@ -25,11 +31,90 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   late Map<FoodItem, int> _editableCart;
   late double _calculatedTotal;
 
+  String get _baseUrl {
+    if (kIsWeb) return 'http://localhost:5000';
+    if (defaultTargetPlatform == TargetPlatform.android) return 'http://10.0.2.2:5000';
+    return 'http://localhost:5000';
+  }
+
   @override
   void initState() {
     super.initState();
     _editableCart = Map.from(widget.cart);
     _calculatedTotal = widget.total;
+    if (widget.isAdditionalOrder || UserSession.isAdditionalOrder) {
+      _fetchParentOrderItemsIfNeeded();
+    }
+  }
+
+  Future<void> _fetchParentOrderItemsIfNeeded() async {
+    final parentId = UserSession.targetParentOrderId ?? UserSession.firstOrderId;
+    if (parentId == null) return;
+
+    try {
+      var response = await http.get(
+        Uri.parse('$_baseUrl/api/v1/orders/$parentId'),
+      );
+
+      Map<String, dynamic>? targetOrder;
+      if (response.statusCode == 200) {
+        final resData = jsonDecode(response.body);
+        if (resData['data'] != null && resData['data'] is Map) {
+          targetOrder = Map<String, dynamic>.from(resData['data']);
+        }
+      }
+
+      if (targetOrder == null) {
+        response = await http.get(
+          Uri.parse('$_baseUrl/api/v1/orders'),
+        );
+        if (response.statusCode == 200) {
+          final resData = jsonDecode(response.body);
+          final List ordersList = resData['data'] ?? [];
+          for (final o in ordersList) {
+            final idStr = (o['order_id'] ?? o['id'] ?? '').toString();
+            if (idStr == parentId.toString()) {
+              targetOrder = Map<String, dynamic>.from(o);
+              break;
+            }
+          }
+        }
+      }
+
+      if (targetOrder != null) {
+        final List items = targetOrder['items'] ?? [];
+        for (final itemMap in items) {
+          final String name = itemMap['name'] ?? 'Dish Item';
+          final double price = double.tryParse(itemMap['unit_price']?.toString() ?? itemMap['price']?.toString() ?? '0') ?? 0.0;
+          final int qty = int.tryParse(itemMap['quantity']?.toString() ?? '1') ?? 1;
+          final int itemId = int.tryParse(itemMap['menu_item_id']?.toString() ?? itemMap['item_id']?.toString() ?? '1') ?? 1;
+
+          FoodItem? existing;
+          for (final key in _editableCart.keys) {
+            if (key.itemDbId == itemId || key.name == name) {
+              existing = key;
+              break;
+            }
+          }
+
+          if (existing != null) {
+            _editableCart[existing] = (_editableCart[existing] ?? 0) + qty;
+          } else {
+            final foodItem = FoodItem(
+              itemDbId: itemId,
+              name: name,
+              price: price,
+              categoryId: 1,
+              isAvailable: true,
+            );
+            _editableCart[foodItem] = qty;
+          }
+        }
+        if (mounted) {
+          _recalculateTotal();
+        }
+      }
+    } catch (_) {}
   }
 
   void _recalculateTotal() {
@@ -168,6 +253,9 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildTableContextStrip(String tableString) {
+    final bool isAdditional = widget.isAdditionalOrder;
+    final String? parentId = UserSession.targetParentOrderId;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
       color: const Color(0xFFEEE7D9),
@@ -179,13 +267,15 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
               const Icon(Icons.check_circle_outline, size: 14, color: Color(0xFF53766C)),
               const SizedBox(width: 6),
               Text(
-                '$tableString • verified',
+                '$tableString verified',
                 style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: Color(0xFF203F35)),
               ),
             ],
           ),
           Text(
-            widget.isTakeout ? 'Takeout' : 'Dine-in',
+            widget.isTakeout
+                ? 'Takeout'
+                : (isAdditional && parentId != null ? 'Adding to $parentId' : 'Dine-in'),
             style: const TextStyle(fontSize: 10, color: Color(0xFF788078), fontWeight: FontWeight.w500),
           ),
         ],
@@ -194,11 +284,14 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildIntroductionHeader() {
+    final bool isAdditional = widget.isAdditionalOrder;
+    final String orderTag = isAdditional ? 'ADDITIONAL ORDER' : 'NEW ORDER';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'NEW ORDER • $_totalItemCount ITEMS',
+          '$orderTag • $_totalItemCount ITEMS',
           style: const TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w700,
@@ -218,7 +311,9 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'A lovely spread for ${widget.isTakeout ? "Takeout" : "Table ${widget.tableId ?? 7}"}. Adjust any dish before sending it to the kitchen.',
+          isAdditional
+              ? 'Adding items to your active table order. Review dishes before sending them to the kitchen.'
+              : 'A lovely spread for ${widget.isTakeout ? "Takeout" : "Table ${widget.tableId ?? 7}"}. Adjust any dish before sending it to the kitchen.',
           style: const TextStyle(fontSize: 13, color: Color(0xFF788078), height: 1.4),
         ),
       ],
@@ -286,7 +381,6 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Dish Image Container
               Container(
                 width: 74,
                 height: 74,
@@ -309,7 +403,6 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                 ),
               ),
               const SizedBox(width: 14),
-              // Dish Info
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -347,7 +440,6 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          // Quantity Stepper and Item Total Row
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -472,6 +564,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                     total: _calculatedTotal,
                     tableId: widget.tableId,
                     isTakeout: widget.isTakeout,
+                    isAdditionalOrder: widget.isAdditionalOrder,
                   ),
                 ),
               );

@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'menu_screen.dart';
 import 'order_status_screen.dart';
+import 'user_session.dart';
 
 class AssistanceScreen extends StatefulWidget {
   final int? tableId;
@@ -117,9 +118,8 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final int tableNum = widget.tableId ?? 7;
+    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
     final String tableString = widget.isTakeout ? 'Takeout' : 'Table ${tableNum.toString().padLeft(2, '0')}';
-
     return Scaffold(
       backgroundColor: const Color(0xFFF8F4EC),
       body: SafeArea(

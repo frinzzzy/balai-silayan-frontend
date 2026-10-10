@@ -68,9 +68,13 @@ class _AuthScreenState extends State<AuthScreen> {
               const SizedBox(height: 32),
               TextFormField(
                 controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(hintText: 'Enter Email Context'),
-                validator: (val) => (val != null && val.contains('@')) ? null : 'Invalid system email structure',
+                keyboardType: TextInputType.text,
+                decoration: const InputDecoration(
+                  hintText: 'Enter staff username',
+                ),
+                validator: (val) => (val != null && val.trim().isNotEmpty)
+                    ? null
+                    : 'Enter your staff username',
               ),
               const SizedBox(height: 16),
               TextFormField(

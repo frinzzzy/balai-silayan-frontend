@@ -3,12 +3,10 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'qr_scanner_screen.dart';
 
 Future<void> main() async {
-  // Siguraduhing handa ang Flutter engine bago mag-load ng external assets
   WidgetsFlutterBinding.ensureInitialized();
-
-  // I-load ang .env file
-  await dotenv.load(fileName: ".env");
-
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch (_) {}
   runApp(const ProductionSoftEngApp());
 }
 

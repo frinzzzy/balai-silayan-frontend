@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:socket_io_client/socket_io_client.dart' as io;
+
 import 'dart:convert';
+
 import 'assistance_screen.dart';
 
 class OrdersScreen extends StatefulWidget {
   final List<Map<String, dynamic>> cartItems;
   final String? authToken;
 
-  const OrdersScreen({
-    super.key,
-    required this.cartItems,
-    this.authToken,
-  });
+  const OrdersScreen({super.key, required this.cartItems, this.authToken});
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -21,73 +21,143 @@ class _OrdersScreenState extends State<OrdersScreen> {
   bool _isLoading = true;
   String _activeFilter = 'ALL';
   List<Map<String, dynamic>> _liveOrdersList = [];
+  final List<Map<String, dynamic>> _recentPaidOrders = [];
+  late io.Socket _socket;
 
-  final List<Map<String, dynamic>> _samplePosOrders = [
-    {
-      "id": 1042,
-      "order_code": "#BS-1042",
-      "table_number": 7,
-      "status": "PENDING",
-      "is_additional": false,
-      "total": 1255.0,
-      "items": [
-        {"name": "Chicken Inasal (x2)", "price": 570.0},
-        {"name": "Kare-Kare (x1)", "price": 425.0},
-        {"name": "Calamansi Cooler (x2)", "price": 170.0},
-      ],
-      "time": "11:49 AM • Today"
-    },
-    {
-      "id": 1043,
-      "order_code": "#BS-1043",
-      "table_number": 12,
-      "status": "PREPARING",
-      "is_additional": true,
-      "total": 680.0,
-      "items": [
-        {"name": "Sizzling Sisig (x2)", "price": 500.0},
-        {"name": "Extra Rice (x3)", "price": 75.0},
-        {"name": "Iced Tea Pitcher (x1)", "price": 105.0},
-      ],
-      "time": "11:52 AM • Today"
-    },
-  ];
+  String get _baseUrl {
+    if (kIsWeb) return 'http://localhost:5000';
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:5000';
+    }
+    return 'http://localhost:5000';
+  }
 
   @override
   void initState() {
     super.initState();
     _fetchLiveCashierOrders();
+    _connectLiveMonitoring();
+  }
+
+  void _connectLiveMonitoring() {
+    _socket = io.io(
+      _baseUrl,
+      io.OptionBuilder()
+          .setTransports(['websocket'])
+          .disableAutoConnect()
+          .build(),
+    );
+    _socket.onConnect((_) {
+      _socket.emit('join_room', 'admin_live_monitoring');
+    });
+    _socket.on('order_updated', _handleLiveMonitoringUpdate);
+    _socket.connect();
+  }
+
+  void _handleLiveMonitoringUpdate(dynamic event) {
+    if (!mounted || event is! Map) return;
+    final String status = (event['status'] ?? event['order_status'] ?? '')
+        .toString()
+        .toUpperCase();
+    if (status == 'COMPLETED') {
+      final int? id = int.tryParse(
+        (event['order_id'] ?? event['id'] ?? '').toString(),
+      );
+      if (id == null) return;
+      setState(() {
+        _recentPaidOrders.removeWhere((order) => order['id'] == id);
+        _recentPaidOrders.insert(0, {
+          'id': id,
+          'order_code': '#BS-$id',
+          'table_number': event['table_number'] ?? event['table_id'] ?? 0,
+          'status': 'PAID',
+          'total':
+              double.tryParse(event['total_amount']?.toString() ?? '0') ?? 0.0,
+          'items': event['items'] is List ? event['items'] : [],
+          'time': 'Just now',
+        });
+        if (_recentPaidOrders.length > 10) _recentPaidOrders.removeLast();
+        _liveOrdersList = [
+          ..._recentPaidOrders,
+          ..._liveOrdersList.where((order) => order['id'] != id),
+        ];
+      });
+      return;
+    }
+    _fetchLiveCashierOrders();
+  }
+
+  @override
+  void dispose() {
+    _socket.disconnect();
+    _socket.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchLiveCashierOrders() async {
     try {
-      final response = await http.get(Uri.parse('http://localhost:5000/api/v1/orders'));
+      final headers = <String, String>{};
+      if (widget.authToken != null && widget.authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer ${widget.authToken}';
+      }
+      final response = await http.get(
+        Uri.parse('$_baseUrl/api/v1/orders'),
+        headers: headers,
+      );
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
         final List<dynamic> dataList = resData['data'] ?? [];
-        if (dataList.isNotEmpty && mounted) {
+        if (mounted) {
           final mapped = dataList.map((o) {
-            final int id = o['id'] ?? 1042;
+            final int id = o['order_id'] ?? o['id'] ?? 0;
             final String code = o['order_code'] ?? "#BS-$id";
             final int tbl = o['table_number'] ?? o['table_id'] ?? 7;
-            final String status = (o['status'] ?? 'PENDING').toString().toUpperCase();
-            final double tot = double.tryParse(o['grand_total']?.toString() ?? '0') ?? 0.0;
+            final String status =
+                (o['order_status'] ?? o['status'] ?? 'PENDING')
+                    .toString()
+                    .toUpperCase();
+            final double tot =
+                double.tryParse(
+                  (o['total_amount'] ?? o['grand_total'])?.toString() ?? '0',
+                ) ??
+                0.0;
+            final List items = (o['items'] as List? ?? []).map((item) {
+              final int quantity =
+                  int.tryParse(item['quantity']?.toString() ?? '') ?? 1;
+              final double unitPrice =
+                  double.tryParse(item['unit_price']?.toString() ?? '0') ?? 0.0;
+              final double addonTotal =
+                  double.tryParse(item['addon_total']?.toString() ?? '0') ??
+                  0.0;
+              final double lineTotal =
+                  double.tryParse(item['line_total']?.toString() ?? '') ??
+                  (unitPrice + addonTotal) * quantity;
+              return {
+                ...Map<String, dynamic>.from(item as Map),
+                'name': '${item['name'] ?? 'Item'} (x$quantity)',
+                'price': unitPrice * quantity,
+                'line_total': lineTotal,
+              };
+            }).toList();
             return {
               "id": id,
               "order_code": code,
               "table_number": tbl,
               "status": status,
-              "is_additional": o['is_additional'] ?? false,
-              "total": tot > 0 ? tot : 1255.0,
-              "items": o['items'] ?? [
-                {"name": "Heritage Dish Selection", "price": tot}
-              ],
+              "total": tot,
+              "items": items,
               "time": "Today",
             };
           }).toList();
+          final List<Map<String, dynamic>> visibleOrders = [
+            ..._recentPaidOrders.where(
+              (paid) => !mapped.any((order) => order['id'] == paid['id']),
+            ),
+            ...mapped,
+          ];
 
           setState(() {
-            _liveOrdersList = List<Map<String, dynamic>>.from(mapped);
+            _liveOrdersList = List<Map<String, dynamic>>.from(visibleOrders);
             _isLoading = false;
           });
           return;
@@ -97,7 +167,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
     if (mounted) {
       setState(() {
-        _liveOrdersList = _samplePosOrders;
+        _liveOrdersList = List<Map<String, dynamic>>.from(_recentPaidOrders);
         _isLoading = false;
       });
     }
@@ -105,20 +175,29 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   Future<void> _updateOrderStatus(int orderId, String newStatus) async {
     try {
-      await http.put(
-        Uri.parse('http://localhost:5000/api/v1/orders/$orderId/status'),
-        headers: {"Content-Type": "application/json"},
+      final response = await http.patch(
+        Uri.parse('$_baseUrl/api/v1/orders/$orderId/status'),
+        headers: {
+          "Content-Type": "application/json",
+          if (widget.authToken != null && widget.authToken!.isNotEmpty)
+            'Authorization': 'Bearer ${widget.authToken}',
+        },
         body: jsonEncode({"status": newStatus}),
       );
-    } catch (_) {}
+      if (response.statusCode != 200) {
+        throw Exception('Status update failed (${response.statusCode}).');
+      }
+      await _fetchLiveCashierOrders();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update order: $error')),
+        );
+      }
+      return;
+    }
 
     if (mounted) {
-      setState(() {
-        final index = _liveOrdersList.indexWhere((o) => o['id'] == orderId);
-        if (index > -1) {
-          _liveOrdersList[index]['status'] = newStatus;
-        }
-      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Order #$orderId updated to $newStatus!'),
@@ -142,7 +221,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
           icon: const Icon(Icons.arrow_back, color: Color(0xFF203F35)),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('Cashier & POS Station', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        title: const Text(
+          'Cashier & POS Station',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF203F35),
+          ),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
         actions: [
@@ -151,8 +236,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
             onPressed: _fetchLiveCashierOrders,
           ),
           IconButton(
-            icon: const Icon(Icons.notifications_outlined, color: Color(0xFF203F35)),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AssistanceScreen())),
+            icon: const Icon(
+              Icons.notifications_outlined,
+              color: Color(0xFF203F35),
+            ),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const AssistanceScreen()),
+            ),
           ),
         ],
       ),
@@ -163,17 +254,23 @@ class _OrdersScreenState extends State<OrdersScreen> {
             _buildFilterPillsBar(),
             Expanded(
               child: _isLoading
-                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF203F35)))
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: Color(0xFF203F35),
+                      ),
+                    )
                   : filtered.isEmpty
-                  ? const Center(child: Text('No orders match this status filter.'))
+                  ? const Center(
+                      child: Text('No orders match this status filter.'),
+                    )
                   : ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: filtered.length,
-                itemBuilder: (context, idx) {
-                  final order = filtered[idx];
-                  return _buildCashierOrderCard(order);
-                },
-              ),
+                      padding: const EdgeInsets.all(16),
+                      itemCount: filtered.length,
+                      itemBuilder: (context, idx) {
+                        final order = filtered[idx];
+                        return _buildCashierOrderCard(order);
+                      },
+                    ),
             ),
           ],
         ),
@@ -207,8 +304,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 fontSize: 11,
                 color: isSelected ? Colors.white : const Color(0xFF788078),
               ),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-              side: BorderSide(color: isSelected ? const Color(0xFF203F35) : const Color(0xFFE5DFD3)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(100),
+              ),
+              side: BorderSide(
+                color: isSelected
+                    ? const Color(0xFF203F35)
+                    : const Color(0xFFE5DFD3),
+              ),
               showCheckmark: false,
             ),
           );
@@ -222,8 +325,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final String code = order['order_code'] ?? "#BS-$id";
     final int tableNum = order['table_number'] ?? 7;
     final String status = order['status'] ?? 'PENDING';
-    final bool isAdditional = order['is_additional'] ?? false;
-    final double total = double.tryParse(order['total']?.toString() ?? '0') ?? 0.0;
+    final double total =
+        double.tryParse(order['total']?.toString() ?? '0') ?? 0.0;
     final List items = order['items'] ?? [];
 
     Color badgeBg = const Color(0xFFEEE7D9);
@@ -261,41 +364,119 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    isAdditional ? 'ADDITIONAL ORDER' : 'NEW ORDER',
-                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFA47C3D), letterSpacing: 1.1),
+                    'TABLE SESSION RECEIPT',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF53766C),
+                      letterSpacing: 1.1,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     code,
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF203F35),
+                    ),
                   ),
                 ],
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(100)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: badgeBg,
+                  borderRadius: BorderRadius.circular(100),
+                ),
                 child: Text(
                   status,
-                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: badgeFg),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: badgeFg,
+                  ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 10),
-          Text('Table #$tableNum • Dine-In', style: const TextStyle(fontSize: 12, color: Color(0xFF788078))),
+          Text(
+            'Table #$tableNum • Dine-In',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF788078)),
+          ),
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 10.0),
             child: Divider(height: 1, color: Color(0xFFE5DFD3)),
           ),
           ...items.map((item) {
-            final p = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+            final double p =
+                double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+            final List addons = item['addons'] is List
+                ? item['addons'] as List
+                : const [];
+            final int quantity =
+                int.tryParse(item['quantity']?.toString() ?? '') ?? 1;
             return Padding(
-              padding: const EdgeInsets.only(bottom: 6.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(item['name'] ?? 'Item', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF24382F))),
-                  Text('₱${p.toStringAsFixed(0)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item['name'] ?? 'Item',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF24382F),
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '₱${p.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF203F35),
+                        ),
+                      ),
+                    ],
+                  ),
+                  ...addons.map((addon) {
+                    final double addonPrice =
+                        double.tryParse(addon['price']?.toString() ?? '0') ??
+                        0.0;
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 8, top: 2),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '+ ${addon['name'] ?? 'Add-on'}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF53766C),
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '₱${(addonPrice * quantity).toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF53766C),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
                 ],
               ),
             );
@@ -307,8 +488,22 @@ class _OrdersScreenState extends State<OrdersScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Total Amount', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF24382F))),
-              Text('₱${total.toStringAsFixed(0)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+              const Text(
+                'Total Amount',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF24382F),
+                ),
+              ),
+              Text(
+                '₱${total.toStringAsFixed(0)}',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF203F35),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -319,36 +514,58 @@ class _OrdersScreenState extends State<OrdersScreen> {
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF203F35),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                     onPressed: () => _updateOrderStatus(id, 'PREPARING'),
-                    child: const Text('Accept & Prepare', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    child: const Text(
+                      'Accept & Prepare',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
-              if (status == 'PREPARING') ...[
+              if (status == 'PREPARING')
                 Expanded(
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF203F35),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                     onPressed: () => _updateOrderStatus(id, 'SERVED'),
-                    child: const Text('Mark Served', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    child: const Text(
+                      'Mark Served',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
-              ],
-              if (status == 'SERVED') ...[
+              if (status == 'SERVED')
                 Expanded(
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF53766C),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                     onPressed: () => _updateOrderStatus(id, 'PAID'),
-                    child: const Text('Mark Paid & Close', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    child: const Text(
+                      'Mark Paid & Close',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
-              ],
             ],
           ),
         ],
