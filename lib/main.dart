@@ -42,7 +42,8 @@ class ProductionSoftEngApp extends StatelessWidget {
           labelStyle: const TextStyle(color: Color(0xFF788078), fontWeight: FontWeight.w500),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFE5DFD3))),
           enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFE5DFD3))),
-          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFF203F35), width: 1.8)),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(
+              0xFF500808), width: 1.8)),
         ),
         cardTheme: CardThemeData(
           color: const Color(0xFFFFFDFA),

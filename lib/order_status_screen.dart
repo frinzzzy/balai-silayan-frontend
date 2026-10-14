@@ -80,61 +80,64 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   String _formatOrderCode(dynamic orderId) {
     return UserSession.formatOrderCode(orderId);
   }
+
+  List<Map<String, dynamic>> _orderListFrom(dynamic value) {
+    if (value is List) {
+      return value.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{}).toList();
+    }
+    return [];
+  }
   Future<void> _fetchLatestOrderFromBackend() async {
     try {
       final int? sessionId =
           UserSession.activeSessionId ??
               int.tryParse(UserSession.sessionId ?? '');
-      final String? sessionToken = UserSession.customerSessionToken;
-      final bool hasCustomerSession =
-          sessionId != null && sessionToken != null && sessionToken.isNotEmpty;
       final int tableNum = widget.tableId ?? UserSession.activeTableNumber ?? UserSession.activeTableId ?? 7;
 
       Map<String, dynamic>? matchingOrder;
       double sessionGrandTotal = 0.0;
       List<dynamic> sessionItems = [];
 
-      // 1. Kunin ang session bill upang masalo ang lahat ng orders (kabilang ang additional orders) sa ilalim ng active session
-      if (hasCustomerSession) {
-        try {
-          final response = await http.get(
-            Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
-            headers: {'Authorization': 'Bearer $sessionToken'},
-          );
-          if (response.statusCode == 200) {
-            final decoded = jsonDecode(response.body);
-            final resData = decoded['data'] ?? decoded;
-            if (resData is Map) {
-              sessionGrandTotal = double.tryParse(resData['grand_total']?.toString() ?? '0') ?? 0.0;
+      // 1. Tawagin ang bagong pampublikong endpoint: GET /api/v1/customer/orders/live?table_id={tableId}&session_id={sessionId}
+      final String liveUrl = sessionId != null
+          ? '$_baseUrl/api/v1/customer/orders/live?table_id=$tableNum&session_id=$sessionId'
+          : '$_baseUrl/api/v1/customer/orders/live?table_id=$tableNum';
 
-              if (resData['orders'] is List) {
-                final List ordersList = resData['orders'];
+      final response = await http.get(Uri.parse(liveUrl));
 
-                // Hanapin ang eksaktong widget.orderId o kaya ang pinakahuling order kung additional order
-                if (widget.orderId != null) {
-                  final targetIdStr = widget.orderId.toString().replaceAll('#BS-', '').trim();
-                  for (final o in ordersList) {
-                    if (o is Map) {
-                      final idStr = (o['order_id'] ?? o['id'] ?? '').toString();
-                      if (idStr == widget.orderId.toString() || idStr == targetIdStr) {
-                        matchingOrder = Map<String, dynamic>.from(o);
-                        break;
-                      }
-                    }
-                  }
-                }
+      if (response.statusCode == 200) {
+        final dynamic decodedResponse = jsonDecode(response.body);
+        final dynamic responseData = decodedResponse is Map
+            ? decodedResponse['data'] ?? decodedResponse['orders'] ?? decodedResponse
+            : decodedResponse;
 
-                // Fallback sa pinakabagong order sa session kung walang direktang nahanap
-                if (matchingOrder == null && ordersList.isNotEmpty && ordersList.last is Map) {
-                  matchingOrder = Map<String, dynamic>.from(ordersList.last);
-                }
+        final List<Map<String, dynamic>> ordersList = _orderListFrom(
+          responseData is Map ? responseData['orders'] : responseData,
+        );
+
+        if (ordersList.isNotEmpty) {
+          sessionGrandTotal = ordersList.fold(0.0, (sum, ord) {
+            return sum + (double.tryParse(ord['total_amount']?.toString() ?? ord['order_total']?.toString() ?? '0') ?? 0.0);
+          });
+
+          if (widget.orderId != null) {
+            final targetIdStr = widget.orderId.toString().replaceAll('#BS-', '').trim();
+            for (final o in ordersList) {
+              final idStr = (o['order_id'] ?? o['id'] ?? '').toString();
+              if (idStr.isNotEmpty && (idStr == widget.orderId.toString() || idStr == targetIdStr)) {
+                matchingOrder = Map<String, dynamic>.from(o);
+                break;
               }
             }
           }
-        } catch (_) {}
+
+          if (matchingOrder == null && ordersList.isNotEmpty) {
+            matchingOrder = Map<String, dynamic>.from(ordersList.last);
+          }
+        }
       }
 
-      // 2. Fallback sa direct orders endpoint kung walang customer session
+      // 2. Fallback sa direct orders endpoint kung walang mahanap sa live
       if (matchingOrder == null && widget.orderId != null) {
         try {
           final singleRes = await http.get(Uri.parse('$_baseUrl/api/v1/orders/${widget.orderId}'));
@@ -143,19 +146,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
             final resData = singleData['data'] ?? singleData['order'];
             if (resData != null && resData is Map) {
               matchingOrder = Map<String, dynamic>.from(resData);
-            }
-          }
-        } catch (_) {}
-      }
-
-      if (matchingOrder == null) {
-        try {
-          final response = await http.get(Uri.parse('$_baseUrl/api/v1/orders?table_id=$tableNum&all=true'));
-          if (response.statusCode == 200) {
-            final decoded = jsonDecode(response.body);
-            final responseData = decoded['data'] ?? decoded['orders'];
-            if (responseData is List && responseData.isNotEmpty && responseData.last is Map) {
-              matchingOrder = Map<String, dynamic>.from(responseData.last);
             }
           }
         } catch (_) {}

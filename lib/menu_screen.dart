@@ -303,16 +303,18 @@ class _MenuScreenState extends State<MenuScreen> {
                 children: [
                   Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)))),
                   const SizedBox(height: 20),
-                  const Text('Select Your Dining Style', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+                  const Text('Select Your Dining Style', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(
+                      0xFF500808))),
                   const SizedBox(height: 16),
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          icon: const Icon(Icons.qr_code_scanner, color: Color(0xFF203F35)),
+                          icon: const Icon(Icons.qr_code_scanner, color: Color(
+                              0xFF4A0707)),
                           label: const Text('Scan Table QR Code'),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF203F35),
+                            foregroundColor: const Color(0xFF500808),
                             backgroundColor: const Color(0xFFEEE7D9),
                             side: const BorderSide(color: Color(0xFFE5DFD3)),
                             padding: const EdgeInsets.symmetric(vertical: 12),
