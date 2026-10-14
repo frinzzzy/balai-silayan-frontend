@@ -4,6 +4,7 @@ import '../auth/auth_screen.dart';
 import '../../orders_screen.dart';
 import '../../reservations_screen.dart';
 import '../../assistance_screen.dart';
+import '../../admin_dashboard_screen.dart';
 
 class HomeHubScreen extends StatefulWidget {
   const HomeHubScreen({super.key});
@@ -19,11 +20,26 @@ class _HomeHubScreenState extends State<HomeHubScreen> {
   final List<Map<String, dynamic>> _cartItems = [];
 
   void _onLoginSuccess(String token, String name) {
-    setState(() {
-      _authToken = token;
-      _currentUserName = name;
-      _currentIndex = 1;
-    });
+    final bool isAdmin = name.toLowerCase() == 'admin' ||
+        name.toLowerCase() == 'manager' ||
+        token.contains('admin');
+
+    if (!mounted) return;
+
+    if (isAdmin) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const AdminDashboardScreen(),
+        ),
+      );
+    } else {
+      setState(() {
+        _authToken = token;
+        _currentUserName = name;
+        _currentIndex = 1;
+      });
+    }
   }
 
   @override

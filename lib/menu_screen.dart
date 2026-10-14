@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:ui';
 import 'dart:convert';
+import 'dart:async';
 import 'checkout_screen.dart';
 import 'kitchen_screen.dart';
 import 'waiter_screen.dart';
@@ -13,6 +14,7 @@ import 'food_details_screen.dart';
 import 'qr_scanner_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'session_bill_screen.dart';
+import 'admin_dashboard_screen.dart';
 import 'user_session.dart';
 
 class FoodItem {
@@ -121,6 +123,7 @@ class _MenuScreenState extends State<MenuScreen> {
   ];
 
   List<MenuCategory> _categoriesList = [];
+  Timer? _heartbeatTimer;
 
   @override
   void initState() {
@@ -137,14 +140,53 @@ class _MenuScreenState extends State<MenuScreen> {
       _chosenTableNumber = UserSession.activeTableId;
     }
 
-    // Strict control para sa New Order vs Additional Order
+    // MAHIGPIT NA KONTROL PARA SA NEW ORDER VS ADDITIONAL ORDER
     UserSession.isAdditionalOrder = widget.isAdditionalOrder;
     if (!widget.isAdditionalOrder) {
       UserSession.targetParentOrderId = null;
+      UserSession.lastPlacedOrderId = null;
     }
 
     _fetchLiveDatabaseMenu();
     _syncExistingOrdersForTable();
+    _startHeartbeatTimer();
+  }
+
+  void _startHeartbeatTimer() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(minutes: 5), (timer) async {
+      final sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      final token = UserSession.activeSessionToken;
+      if (sessionId == null) return;
+
+      try {
+        final Map<String, String> headers = {"Content-Type": "application/json"};
+        if (token != null && token.isNotEmpty) {
+          headers["Authorization"] = "Bearer $token";
+        }
+
+        await http.post(
+          Uri.parse('http://localhost:5000/api/v1/customer/sessions/$sessionId/activity'),
+          headers: headers,
+        );
+      } catch (_) {}
+    });
+  }
+
+  @override
+  void dispose() {
+    _heartbeatTimer?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Map<String, String> get _authHeaders {
+    final token = UserSession.activeSessionToken;
+    final Map<String, String> headers = {"Content-Type": "application/json"};
+    if (token != null && token.isNotEmpty) {
+      headers["Authorization"] = "Bearer $token";
+    }
+    return headers;
   }
 
   Future<void> _syncExistingOrdersForTable() async {
@@ -164,14 +206,9 @@ class _MenuScreenState extends State<MenuScreen> {
             UserSession.sessionId = rawSessionId.toString();
           }
 
-          if (widget.isAdditionalOrder) {
-            final rawId = firstOrder['id'] ?? firstOrder['order_id'];
-            if (rawId != null) {
-              UserSession.firstOrderId = int.tryParse(rawId.toString());
-              UserSession.targetParentOrderId ??= rawId.toString();
-            }
-          } else {
-            UserSession.targetParentOrderId = null;
+          final rawId = firstOrder['id'] ?? firstOrder['order_id'];
+          if (rawId != null && widget.isAdditionalOrder && UserSession.targetParentOrderId == null) {
+            UserSession.targetParentOrderId = rawId.toString();
           }
         }
       }
@@ -188,6 +225,7 @@ class _MenuScreenState extends State<MenuScreen> {
     try {
       final response = await http.get(
         Uri.parse('http://localhost:5000/api/v1/menu'),
+        headers: _authHeaders,
       );
       if (response.statusCode == 200) {
         final Map<String, dynamic> decodedData = jsonDecode(response.body);
@@ -233,6 +271,7 @@ class _MenuScreenState extends State<MenuScreen> {
     try {
       final response = await http.get(
         Uri.parse('http://localhost:5000/api/v1/tables'),
+        headers: _authHeaders,
       );
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
@@ -497,38 +536,72 @@ class _MenuScreenState extends State<MenuScreen> {
 
     final isDesktop = MediaQuery.of(context).size.width > 900;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F4EC),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildRestaurantHeader(),
-            _buildTableContextStrip(),
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF203F35)))
-                  : SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildIntroductionHeader(),
-                    const SizedBox(height: 16),
-                    _buildSearchBar(),
-                    const SizedBox(height: 20),
-                    _buildCategorySelector(),
-                    const SizedBox(height: 24),
-                    _buildSectionHeader(currentCategoryName, filteredItems.length),
-                    const SizedBox(height: 16),
-                    _buildFoodGrid(filteredItems, isDesktop ? 4 : 2),
-                  ],
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFFFFFDFA),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: const Text('End Session?', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+            content: const Text('Are you sure to end this session?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('No', style: TextStyle(color: Color(0xFF788078))),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Yes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+        if (shouldExit == true && context.mounted) {
+          UserSession.clearSession();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const QrScannerScreen()),
+                (route) => false,
+          );
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF8F4EC),
+        body: SafeArea(
+          child: Column(
+            children: [
+              _buildRestaurantHeader(),
+              _buildTableContextStrip(),
+              Expanded(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator(color: Color(0xFF203F35)))
+                    : SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildIntroductionHeader(),
+                      const SizedBox(height: 16),
+                      _buildSearchBar(),
+                      const SizedBox(height: 20),
+                      _buildCategorySelector(),
+                      const SizedBox(height: 24),
+                      _buildSectionHeader(currentCategoryName, filteredItems.length),
+                      const SizedBox(height: 16),
+                      _buildFoodGrid(filteredItems, isDesktop ? 4 : 2),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
+        bottomNavigationBar: _buildCustomerBottomNav(),
       ),
-      bottomNavigationBar: _buildCustomerBottomNav(),
     );
   }
 
@@ -605,6 +678,11 @@ class _MenuScreenState extends State<MenuScreen> {
                 icon: const Icon(Icons.soup_kitchen_outlined, color: Color(0xFF203F35), size: 22),
                 tooltip: 'Kitchen Display',
                 onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const KitchenScreen())),
+              ),
+              IconButton(
+                icon: const Icon(Icons.admin_panel_settings_outlined, color: Color(0xFF203F35), size: 22),
+                tooltip: 'Admin Dashboard',
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminDashboardScreen())),
               ),
               InkWell(
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AssistanceScreen())),
@@ -843,7 +921,7 @@ class _MenuScreenState extends State<MenuScreen> {
               border: Border.all(color: const Color(0xFFE5DFD3)),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.02),
+                  color: Colors.black.withValues(alpha: 0.02),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -1093,11 +1171,13 @@ class _MenuScreenState extends State<MenuScreen> {
                 );
               }),
               _buildNavItem(Icons.track_changes, 'Live Status', onTap: () {
+                final dynamic activeLiveOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
+
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (context) => OrderStatusScreen(
-                      orderId: UserSession.lastPlacedOrderId ?? 1042,
+                      orderId: activeLiveOrderId,
                       isTakeout: _isTakeoutSelected,
                       tableId: _chosenTableNumber,
                       isAdditionalOrder: widget.isAdditionalOrder,

@@ -8,6 +8,10 @@ class UserSession {
   static String? authToken;
   static String? customerSessionToken;
   static bool isAdditionalOrder = false;
+  static String? targetParentOrderId;
+  static dynamic firstOrderId;
+
+  static String? get activeSessionToken => customerSessionToken ?? authToken;
 
   static void clearSession() {
     sessionId = null;
@@ -19,5 +23,7 @@ class UserSession {
     authToken = null;
     customerSessionToken = null;
     isAdditionalOrder = false;
+    targetParentOrderId = null;
+    firstOrderId = null;
   }
 }

@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-
 import 'dart:convert';
-
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'orders_screen.dart';
+import 'qr_scanner_screen.dart';
 import 'user_session.dart';
 
 class OrderStatusScreen extends StatefulWidget {
@@ -59,30 +58,28 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   @override
   void initState() {
     super.initState();
-    _fetchedTotalAmount = widget.totalAmount;
-    _fetchedOrderItems = widget.initialOrderItems ?? [];
+    _fetchedTotalAmount = widget.totalAmount > 0 ? widget.totalAmount : UserSession.lastPlacedOrderTotal;
+    _fetchedOrderItems = widget.initialOrderItems ?? UserSession.lastPlacedOrderItems;
     _fetchLatestOrderFromBackend();
     _connectRepositorySocketStream();
   }
 
-  String _formatOrderCode(dynamic orderId) {
-    if (orderId == null) return '#BS-1042';
-    final str = orderId.toString().trim();
-    if (str.startsWith('#')) return str;
-
-    final intVal = int.tryParse(str);
-    if (intVal != null) {
-      if (intVal > 9999) {
-        final code = intVal.toRadixString(36).toUpperCase().padLeft(5, '0');
-        return '#BS-$code';
-      }
-      return '#BS-${intVal.toString().padLeft(4, '0')}';
+  @override
+  void didUpdateWidget(covariant OrderStatusScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.orderId != widget.orderId) {
+      setState(() {
+        _isLoadingLiveOrder = true;
+        _fetchedTotalAmount = widget.totalAmount > 0 ? widget.totalAmount : UserSession.lastPlacedOrderTotal;
+        _fetchedOrderItems = widget.initialOrderItems ?? UserSession.lastPlacedOrderItems;
+      });
+      _fetchLatestOrderFromBackend();
     }
-
-    final cleanStr = str.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toUpperCase();
-    return '#BS-${cleanStr.length > 5 ? cleanStr.substring(0, 5) : cleanStr.padLeft(5, '0')}';
   }
 
+  String _formatOrderCode(dynamic orderId) {
+    return UserSession.formatOrderCode(orderId);
+  }
   Future<void> _fetchLatestOrderFromBackend() async {
     try {
       final int? sessionId =
@@ -93,158 +90,153 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           sessionId != null && sessionToken != null && sessionToken.isNotEmpty;
       final int tableNum = widget.tableId ?? UserSession.activeTableNumber ?? UserSession.activeTableId ?? 7;
 
-      final response = await http.get(
-        Uri.parse(
-          hasCustomerSession
-              ? '$_baseUrl/api/v1/customer/sessions/$sessionId/bill'
-              : '$_baseUrl/api/v1/orders?table_id=$tableNum&all=true',
-        ),
-        headers: hasCustomerSession
-            ? {'Authorization': 'Bearer $sessionToken'}
-            : const {},
-      );
+      Map<String, dynamic>? matchingOrder;
+      double sessionGrandTotal = 0.0;
+      List<dynamic> sessionItems = [];
 
-      if (response.statusCode == 200) {
-        final dynamic decodedResponse = jsonDecode(response.body);
-        final dynamic responseData = decodedResponse is Map
-            ? decodedResponse['data'] ??
-            decodedResponse['orders'] ??
-            decodedResponse
-            : null;
-        final List<Map<String, dynamic>> ordersList = _orderListFrom(
-          hasCustomerSession && responseData is Map
-              ? responseData['orders']
-              : responseData,
-        );
-
-        Map<String, dynamic>? matchingOrder;
-
-        if (widget.orderId != null) {
-          for (final o in ordersList) {
-            final idStr = (o['order_id'] ?? o['id'] ?? '').toString();
-            if (idStr.isNotEmpty && idStr == widget.orderId.toString()) {
-              matchingOrder = o;
-              break;
-            }
-          }
-        }
-
-        List<Map<String, dynamic>> unfinishedOrders = [];
+      // 1. Kunin ang session bill upang masalo ang lahat ng orders (kabilang ang additional orders) sa ilalim ng active session
+      if (hasCustomerSession) {
         try {
-          unfinishedOrders = await _fetchUnfinishedTableOrders(tableNum);
+          final response = await http.get(
+            Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
+            headers: {'Authorization': 'Bearer $sessionToken'},
+          );
+          if (response.statusCode == 200) {
+            final decoded = jsonDecode(response.body);
+            final resData = decoded['data'] ?? decoded;
+            if (resData is Map) {
+              sessionGrandTotal = double.tryParse(resData['grand_total']?.toString() ?? '0') ?? 0.0;
+
+              if (resData['orders'] is List) {
+                final List ordersList = resData['orders'];
+
+                // Hanapin ang eksaktong widget.orderId o kaya ang pinakahuling order kung additional order
+                if (widget.orderId != null) {
+                  final targetIdStr = widget.orderId.toString().replaceAll('#BS-', '').trim();
+                  for (final o in ordersList) {
+                    if (o is Map) {
+                      final idStr = (o['order_id'] ?? o['id'] ?? '').toString();
+                      if (idStr == widget.orderId.toString() || idStr == targetIdStr) {
+                        matchingOrder = Map<String, dynamic>.from(o);
+                        break;
+                      }
+                    }
+                  }
+                }
+
+                // Fallback sa pinakabagong order sa session kung walang direktang nahanap
+                if (matchingOrder == null && ordersList.isNotEmpty && ordersList.last is Map) {
+                  matchingOrder = Map<String, dynamic>.from(ordersList.last);
+                }
+              }
+            }
+          }
         } catch (_) {}
+      }
 
-        if (matchingOrder == null && widget.orderId != null) {
-          for (final order in unfinishedOrders) {
-            final idStr = (order['order_id'] ?? order['id'] ?? '').toString();
-            if (idStr == widget.orderId.toString()) {
-              matchingOrder = order;
-              break;
+      // 2. Fallback sa direct orders endpoint kung walang customer session
+      if (matchingOrder == null && widget.orderId != null) {
+        try {
+          final singleRes = await http.get(Uri.parse('$_baseUrl/api/v1/orders/${widget.orderId}'));
+          if (singleRes.statusCode == 200) {
+            final singleData = jsonDecode(singleRes.body);
+            final resData = singleData['data'] ?? singleData['order'];
+            if (resData != null && resData is Map) {
+              matchingOrder = Map<String, dynamic>.from(resData);
             }
+          }
+        } catch (_) {}
+      }
+
+      if (matchingOrder == null) {
+        try {
+          final response = await http.get(Uri.parse('$_baseUrl/api/v1/orders?table_id=$tableNum&all=true'));
+          if (response.statusCode == 200) {
+            final decoded = jsonDecode(response.body);
+            final responseData = decoded['data'] ?? decoded['orders'];
+            if (responseData is List && responseData.isNotEmpty && responseData.last is Map) {
+              matchingOrder = Map<String, dynamic>.from(responseData.last);
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 3. Fallback sa memory state kung wala pa ring mahanap mula sa server
+      if (matchingOrder == null && widget.orderId != null) {
+        matchingOrder = {
+          'order_id': widget.orderId,
+          'id': widget.orderId,
+          'total_amount': widget.totalAmount > 0 ? widget.totalAmount : UserSession.lastPlacedOrderTotal,
+          'order_status': 'PENDING',
+          'items': widget.initialOrderItems ?? UserSession.lastPlacedOrderItems,
+        };
+      }
+
+      if (matchingOrder != null && mounted) {
+        final double orderTotal = double.tryParse(
+          (matchingOrder['total_amount'] ?? matchingOrder['order_total'] ?? matchingOrder['grand_total'])?.toString() ?? '0',
+        ) ?? 0.0;
+
+        // Kalkulahin ang total mula sa items at add-ons sakaling mag-zero ang server response
+        double calculatedItemsTotal = 0.0;
+        final List<dynamic> rawItems = matchingOrder['items'] is List ? matchingOrder['items'] : [];
+
+        if (rawItems.isNotEmpty) {
+          for (final item in rawItems) {
+            final double unitPrice = double.tryParse(item['unit_price']?.toString() ?? item['price']?.toString() ?? '0') ?? 0.0;
+            final int qty = int.tryParse(item['quantity']?.toString() ?? '1') ?? 1;
+
+            double addonSum = 0.0;
+            if (item['addons'] is List) {
+              for (final addon in item['addons']) {
+                addonSum += double.tryParse(addon['price']?.toString() ?? '0') ?? 0.0;
+              }
+            }
+            calculatedItemsTotal += (unitPrice + addonSum) * qty;
           }
         }
 
-        if (matchingOrder == null && ordersList.isNotEmpty) {
-          matchingOrder = ordersList.first;
+        final double finalTotal = orderTotal > 0
+            ? orderTotal
+            : (calculatedItemsTotal > 0
+            ? calculatedItemsTotal
+            : (widget.totalAmount > 0 ? widget.totalAmount : sessionGrandTotal));
+
+        final String status = (matchingOrder['status'] ?? matchingOrder['order_status'] ?? 'PENDING').toString().toUpperCase();
+        final String code = matchingOrder['order_code'] ?? _formatOrderCode(matchingOrder['order_id'] ?? matchingOrder['id'] ?? widget.orderId);
+
+        if (rawItems.isNotEmpty) {
+          sessionItems = rawItems;
+        } else if (_fetchedOrderItems.isNotEmpty) {
+          sessionItems = _fetchedOrderItems;
+        } else {
+          sessionItems = UserSession.lastPlacedOrderItems;
         }
 
-        if (matchingOrder != null && mounted) {
-          final List<Map<String, dynamic>> availableOrders = [];
-          final Set<String> includedOrderIds = {};
-          for (final order in [...ordersList, ...unfinishedOrders]) {
-            final int? orderSessionId = int.tryParse(
-              (order['session_id'] ?? '').toString(),
-            );
-            if (sessionId != null &&
-                orderSessionId != null &&
-                orderSessionId != sessionId) {
-              continue;
-            }
-            final id = (order['order_id'] ?? order['id'] ?? '').toString();
-            if (id.isEmpty || includedOrderIds.add(id)) {
-              availableOrders.add(order);
-            }
+        String timeStr = 'Today';
+        if (matchingOrder['created_at'] != null || matchingOrder['time'] != null) {
+          try {
+            final timeVal = matchingOrder['created_at'] ?? matchingOrder['time'];
+            final dt = DateTime.parse(timeVal.toString()).toLocal();
+            final hour = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+            final min = dt.minute.toString().padLeft(2, '0');
+            final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+            timeStr = '$hour:$min $ampm • Today';
+          } catch (_) {
+            timeStr = matchingOrder['time']?.toString() ?? 'Today';
           }
-
-          final matchingOrderId =
-          (matchingOrder['order_id'] ?? matchingOrder['id'] ?? '').toString();
-          if (matchingOrderId.isNotEmpty) {
-            includedOrderIds.add(matchingOrderId);
-            if (!availableOrders.any((o) => (o['order_id'] ?? o['id'] ?? '').toString() == matchingOrderId)) {
-              availableOrders.add(matchingOrder);
-            }
-          }
-
-          final List<Map<String, dynamic>> receiptOrders =
-          _relatedOrdersFor(matchingOrder, availableOrders);
-
-          // Kina-calculate ang total mula sa lahat ng pinagsama-samang orders ng session
-          double tableTotal = 0.0;
-          for (final order in receiptOrders) {
-            tableTotal += _orderTotal(order);
-          }
-
-          final double total = tableTotal > 0
-              ? tableTotal
-              : (widget.totalAmount > 0
-              ? widget.totalAmount
-              : _orderTotal(matchingOrder));
-
-          final String status = (matchingOrder['order_status'] ?? 'PENDING')
-              .toString()
-              .toUpperCase();
-          final String code =
-              matchingOrder['order_code'] ??
-                  _formatOrderCode(matchingOrder['order_id'] ?? widget.orderId);
-          final bool sessionWasClosed =
-              hasCustomerSession &&
-                  responseData is Map &&
-                  (responseData['session_status'] ?? '').toString().toUpperCase() ==
-                      'CLOSED';
-
-          String timeStr = 'Today';
-          if (matchingOrder['created_at'] != null) {
-            try {
-              final dt = DateTime.parse(matchingOrder['created_at']).toLocal();
-              final hour = dt.hour > 12
-                  ? dt.hour - 12
-                  : (dt.hour == 0 ? 12 : dt.hour);
-              final min = dt.minute.toString().padLeft(2, '0');
-              final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-              timeStr = '$hour:$min $ampm • Today';
-            } catch (_) {}
-          }
-
-          // Pina-flatten ang LAHAT ng order items mula sa receiptOrders para magpatong sila
-          final List<dynamic> itemsList = receiptOrders
-              .expand(
-                (order) => order['items'] is List
-                ? order['items'] as List
-                : const [],
-          )
-              .toList();
-
-          final double computedSum = total > 0
-              ? total
-              : UserSession.lastPlacedOrderTotal;
-
-          setState(() {
-            _hasActiveOrder = true;
-            _fetchedTotalAmount = computedSum;
-            _fetchedOrderCode = code;
-            _formattedTimestamp = timeStr;
-            _fetchedOrderItems = itemsList.isNotEmpty ? itemsList : UserSession.lastPlacedOrderItems;
-            _isLoadingLiveOrder = false;
-            _sessionWasClosed = sessionWasClosed;
-            if (sessionWasClosed && status != 'COMPLETED') {
-              _statusBadgeLabel = 'Session Closed';
-              _stepperProgressIndex = 3;
-            } else {
-              _applyStatusValues(status);
-            }
-          });
-          return;
         }
+
+        setState(() {
+          _hasActiveOrder = true;
+          _fetchedTotalAmount = finalTotal > 0 ? finalTotal : (UserSession.lastPlacedOrderTotal > 0 ? UserSession.lastPlacedOrderTotal : widget.totalAmount);
+          _fetchedOrderCode = code;
+          _formattedTimestamp = timeStr;
+          _fetchedOrderItems = sessionItems;
+          _isLoadingLiveOrder = false;
+          _applyStatusValues(status);
+        });
+        return;
       }
     } catch (_) {}
 
@@ -273,99 +265,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     }
   }
 
-  List<Map<String, dynamic>> _orderListFrom(dynamic value) {
-    dynamic candidate = value;
-    if (candidate is Map) {
-      candidate = candidate['orders'] ?? candidate['data'];
-    }
-    if (candidate is! List) return [];
-    return candidate
-        .whereType<Map>()
-        .map((order) => Map<String, dynamic>.from(order))
-        .toList();
-  }
-
-  Future<List<Map<String, dynamic>>> _fetchUnfinishedTableOrders(
-    int tableId,
-  ) async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$tableId'),
-    );
-    if (response.statusCode != 200) return [];
-
-    final dynamic decodedResponse = jsonDecode(response.body);
-    final dynamic data = decodedResponse is Map
-        ? decodedResponse['data'] ?? decodedResponse['orders']
-        : decodedResponse;
-    return _orderListFrom(data);
-  }
-
-  double _orderTotal(Map<String, dynamic> order) {
-    final dynamic rawTotal =
-        order['total_amount'] ?? order['order_total'] ?? order['grand_total'];
-    final double? total = double.tryParse(rawTotal?.toString() ?? '');
-    if (total != null && total > 0) return total;
-
-    final List<dynamic> items = order['items'] is List
-        ? order['items'] as List
-        : const [];
-    return items.fold<double>(0, (sum, item) {
-      if (item is! Map) return sum;
-      final double quantity =
-          double.tryParse(item['quantity']?.toString() ?? '1') ?? 1;
-      final double price =
-          double.tryParse(
-            (item['unit_price'] ?? item['price'])?.toString() ?? '0',
-          ) ??
-          0;
-      return sum + quantity * price;
-    });
-  }
-
-  List<Map<String, dynamic>> _relatedOrdersFor(
-    Map<String, dynamic> selectedOrder,
-    List<Map<String, dynamic>> availableOrders,
-  ) {
-    String orderId(Map<String, dynamic> order) =>
-        (order['order_id'] ?? order['id'] ?? '').toString();
-    String parentId(Map<String, dynamic> order) =>
-        (order['parent_order_id'] ?? '').toString();
-
-    final Map<String, Map<String, dynamic>> ordersById = {
-      for (final order in availableOrders)
-        if (orderId(order).isNotEmpty) orderId(order): order,
-    };
-    final String selectedId = orderId(selectedOrder);
-    if (selectedId.isEmpty) return [selectedOrder];
-    ordersById.putIfAbsent(selectedId, () => selectedOrder);
-
-    final Set<String> relatedIds = {selectedId};
-    String currentId = selectedId;
-    while (true) {
-      final order = ordersById[currentId];
-      final parent = order == null ? '' : parentId(order);
-      if (parent.isEmpty || !relatedIds.add(parent)) break;
-      currentId = parent;
-    }
-
-    bool addedChild;
-    do {
-      addedChild = false;
-      for (final order in availableOrders) {
-        final id = orderId(order);
-        if (id.isNotEmpty &&
-            relatedIds.contains(parentId(order)) &&
-            relatedIds.add(id)) {
-          addedChild = true;
-        }
-      }
-    } while (addedChild);
-
-    return availableOrders
-        .where((order) => relatedIds.contains(orderId(order)))
-        .toList();
-  }
-
   void _connectRepositorySocketStream() {
     _repositorySocketGateway = io.io(
       _baseUrl,
@@ -390,7 +289,10 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     _repositorySocketGateway.on('order_status_updated', _applyLiveOrderUpdate);
     _repositorySocketGateway.on('orderStatusUpdated', _applyLiveOrderUpdate);
     _repositorySocketGateway.on('new_order', _applyLiveOrderUpdate);
+    _repositorySocketGateway.on('additional_items_added', _applyLiveOrderUpdate);
     _repositorySocketGateway.on('order_paid', _applyLiveOrderUpdate);
+    _repositorySocketGateway.on('bill_requested', _applyLiveOrderUpdate);
+    _repositorySocketGateway.on('session_cancelled', _handleSessionClosed);
     _repositorySocketGateway.on('table_session_closed', _handleSessionClosed);
     _repositorySocketGateway.connect();
   }
@@ -398,6 +300,14 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   void _applyStatusValues(String status) {
     _currentOrderStatus = status;
     switch (status) {
+      case 'NEW':
+        _statusBadgeLabel = 'New Order Received';
+        _stepperProgressIndex = 0;
+        break;
+      case 'PENDING':
+        _statusBadgeLabel = 'Pending review';
+        _stepperProgressIndex = 0;
+        break;
       case 'PREPARING':
         _statusBadgeLabel = 'Preparing in Kitchen';
         _stepperProgressIndex = 1;
@@ -416,6 +326,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         break;
       case 'CANCELLED':
       case 'DECLINED':
+      case 'SESSION_CANCELLED':
         _statusBadgeLabel = 'Cancelled';
         _stepperProgressIndex = 0;
         break;
@@ -430,67 +341,26 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     final Map<String, dynamic> data = eventPayloadData is Map<String, dynamic>
         ? eventPayloadData
         : Map<String, dynamic>.from(eventPayloadData as Map);
-    final String targetOrderId = (data['order_id'] ?? data['id'] ?? '')
-        .toString();
-    final bool isCurrentOrder = targetOrderId == widget.orderId.toString();
-    final int? eventSessionId = int.tryParse(
-      (data['session_id'] ?? '').toString(),
-    );
-    final int? activeSessionId =
-        UserSession.activeSessionId ??
-        int.tryParse(UserSession.sessionId ?? '');
-    final bool isCurrentSession =
-        eventSessionId != null && eventSessionId == activeSessionId;
-    final int currentTableId =
-        widget.tableId ?? UserSession.activeTableId ?? 7;
-    final int currentTableNumber =
-        UserSession.activeTableNumber ?? currentTableId;
-    final int? eventTableId = int.tryParse(
-      (data['table_id'] ?? data['table_number'] ?? '').toString(),
-    );
-    final bool isCurrentTable =
-        eventTableId != null &&
-        (eventTableId == currentTableId ||
-            eventTableId == currentTableNumber);
-    if (!isCurrentOrder && !isCurrentSession && !isCurrentTable) return;
-
-    final String status = (data['status'] ?? data['order_status'] ?? '')
-        .toString()
-        .toUpperCase();
+    final String status = (data['status'] ?? data['order_status'] ?? '').toString().toUpperCase();
 
     setState(() {
       _showLiveTrackerView = true;
-      if (isCurrentOrder && status.isNotEmpty) _applyStatusValues(status);
+      if (status.isNotEmpty) _applyStatusValues(status);
     });
     _fetchLatestOrderFromBackend();
   }
 
   void _handleSessionClosed(dynamic eventPayloadData) {
     if (!mounted || eventPayloadData is! Map) return;
-    final int? eventSessionId = int.tryParse(
-      (eventPayloadData['session_id'] ?? '').toString(),
-    );
-    final int? activeSessionId =
-        UserSession.activeSessionId ??
-        int.tryParse(UserSession.sessionId ?? '');
-    if (eventSessionId == null || eventSessionId != activeSessionId) return;
     setState(() {
       _showLiveTrackerView = true;
-      _statusBadgeLabel = _currentOrderStatus == 'COMPLETED'
-          ? 'Paid • Session Closed'
-          : 'Session Closed';
+      _statusBadgeLabel = 'Session Closed';
       _stepperProgressIndex = 3;
+      _sessionWasClosed = true;
     });
   }
-
   @override
   void dispose() {
-    _repositorySocketGateway.off('order_status_updated');
-    _repositorySocketGateway.off('orderStatusUpdated');
-    _repositorySocketGateway.off('new_order');
-    _repositorySocketGateway.off('order_updated');
-    _repositorySocketGateway.off('order_paid');
-    _repositorySocketGateway.off('table_session_closed');
     _repositorySocketGateway.disconnect();
     _repositorySocketGateway.dispose();
     super.dispose();
@@ -499,7 +369,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   void _navigateToMenu() {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (context) => const MenuScreen()),
-      (route) => false,
+          (route) => false,
     );
   }
 
@@ -507,9 +377,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   Widget build(BuildContext context) {
     final int tableNum =
         widget.tableId ??
-        UserSession.activeTableId ??
-        UserSession.activeTableNumber ??
-        7;
+            UserSession.activeTableId ??
+            UserSession.activeTableNumber ??
+            7;
     final String tableString = widget.isTakeout
         ? 'Takeout'
         : 'Table ${tableNum.toString().padLeft(2, '0')}';
@@ -517,39 +387,73 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         ? _fetchedOrderCode
         : _formatOrderCode(widget.orderId);
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F4EC),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildRestaurantHeader(),
-            _buildTableContextStrip(tableString),
-            Expanded(
-              child: _isLoadingLiveOrder
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                        color: Color(0xFF203F35),
-                      ),
-                    )
-                  : !_hasActiveOrder
-                  ? _buildNoOrderView()
-                  : SingleChildScrollView(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24.0,
-                        vertical: 16.0,
-                      ),
-                      child: _showLiveTrackerView
-                          ? _buildLiveStatusTrackerView(
-                              displayOrderCode,
-                              tableString,
-                            )
-                          : _buildConfirmationView(
-                              displayOrderCode,
-                              tableString,
-                            ),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFFFFFDFA),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: const Text('End Session?', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+            content: const Text('Are you sure to end this session?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('No', style: TextStyle(color: Color(0xFF788078))),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Yes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+        if (shouldExit == true && context.mounted) {
+          UserSession.clearSession();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const QrScannerScreen()),
+                (route) => false,
+          );
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF8F4EC),
+        body: SafeArea(
+          child: Column(
+            children: [
+              _buildRestaurantHeader(),
+              _buildTableContextStrip(tableString),
+              Expanded(
+                child: _isLoadingLiveOrder
+                    ? const Center(
+                  child: CircularProgressIndicator(
+                    color: Color(0xFF203F35),
+                  ),
+                )
+                    : !_hasActiveOrder
+                    ? _buildNoOrderView()
+                    : SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24.0,
+                      vertical: 16.0,
                     ),
-            ),
-          ],
+                    child: _showLiveTrackerView
+                        ? _buildLiveStatusTrackerView(
+                      displayOrderCode,
+                      tableString,
+                    )
+                        : _buildConfirmationView(
+                      displayOrderCode,
+                      tableString,
+                    ),
+                  ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -758,7 +662,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
               ),
               const SizedBox(width: 6),
               Text(
-                '$tableString • verified',
+                '$tableString verified',
                 style: const TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 11,
@@ -942,25 +846,34 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
               child: Divider(height: 1, color: Color(0xFFE5DFD3)),
             ),
             ..._fetchedOrderItems.map((item) {
-              final String name = item['name'] ?? 'Item';
-              final int qty = item['quantity'] ?? 1;
+              final itemName = item['name'] ??
+                  item['item_name'] ??
+                  item['product_name'] ??
+                  item['food_name'] ??
+                  item['title'] ??
+                  (item['menu_item'] is Map ? (item['menu_item']['name'] ?? item['menu_item']['title']) : null) ??
+                  'Item';
+
+              final int qty = int.tryParse(item['quantity']?.toString() ?? '1') ?? 1;
               final double unitPrice =
-                  double.tryParse(item['unit_price']?.toString() ?? '0') ?? 0.0;
+                  double.tryParse(item['unit_price']?.toString() ?? item['price']?.toString() ?? '0') ?? 0.0;
+
               final List addons = item['addons'] is List
                   ? item['addons'] as List
                   : const [];
               final double addonTotal =
                   double.tryParse(item['addon_total']?.toString() ?? '') ??
-                  addons.fold<double>(
-                    0,
-                    (sum, addon) =>
+                      addons.fold<double>(
+                        0,
+                            (sum, addon) =>
                         sum +
-                        (double.tryParse(addon['price']?.toString() ?? '0') ??
-                            0),
-                  );
+                            (double.tryParse(addon['price']?.toString() ?? '0') ??
+                                0),
+                      );
               final double lineTotal =
                   double.tryParse(item['line_total']?.toString() ?? '') ??
-                  (unitPrice + addonTotal) * qty;
+                      (unitPrice + addonTotal) * qty;
+
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10.0),
                 child: Column(
@@ -971,7 +884,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                       children: [
                         Expanded(
                           child: Text(
-                            '$name (x$qty)',
+                            '$itemName (x$qty)',
                             style: const TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w500,
@@ -997,7 +910,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                       ),
                     ),
                     ...addons.map(
-                      (addon) => Padding(
+                          (addon) => Padding(
                         padding: const EdgeInsets.only(left: 8, top: 2),
                         child: Text(
                           '+ ${addon['name'] ?? 'Add-on'} · ₱${(double.tryParse(addon['price']?.toString() ?? '0') ?? 0).toStringAsFixed(2)} each',
@@ -1021,7 +934,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'Order total',
+                'Order Total Amount',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -1029,7 +942,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                 ),
               ),
               Text(
-                '₱${_fetchedTotalAmount.toStringAsFixed(0)}',
+                '₱${_fetchedTotalAmount.toStringAsFixed(2)}',
                 style: const TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
@@ -1157,14 +1070,14 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     } else if (_stepperProgressIndex == 1) {
       stageTitle = 'Chefs are cooking your meal.';
       stageCopy =
-          'Your order is being sizzlingly prepared in our heritage kitchen.';
+      'Your order is being sizzlingly prepared in our heritage kitchen.';
       badgeIcon = Icons.soup_kitchen_outlined;
       badgeBg = const Color(0xFFEAF0E9);
       badgeFg = const Color(0xFF203F35);
     } else if (_stepperProgressIndex == 2) {
       stageTitle = 'Your food is served!';
       stageCopy =
-          'Enjoy your meal at $tableString. Need anything else? Call a waiter anytime.';
+      'Enjoy your meal at $tableString. Need anything else? Call a waiter anytime.';
       badgeIcon = Icons.restaurant_outlined;
       badgeBg = const Color(0xFFEAF0E9);
       badgeFg = const Color(0xFF203F35);
@@ -1254,7 +1167,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                 ),
               ),
               Text(
-                'Total: ₱${_fetchedTotalAmount.toStringAsFixed(0)}',
+                'Total: ₱${_fetchedTotalAmount.toStringAsFixed(2)}',
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
@@ -1372,27 +1285,27 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                   child: Center(
                     child: isActive
                         ? (isCurrentStage
-                              ? Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: const BoxDecoration(
-                                    color: Color(0xFFD7BC86),
-                                    shape: BoxShape.circle,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons.check,
-                                  size: 14,
-                                  color: Colors.white,
-                                ))
+                        ? Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFD7BC86),
+                        shape: BoxShape.circle,
+                      ),
+                    )
+                        : const Icon(
+                      Icons.check,
+                      size: 14,
+                      color: Colors.white,
+                    ))
                         : Container(
-                            width: 5,
-                            height: 5,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFFE5DFD3),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
+                      width: 5,
+                      height: 5,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFE5DFD3),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
                   ),
                 ),
                 if (!isLast)

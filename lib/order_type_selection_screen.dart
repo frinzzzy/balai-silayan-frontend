@@ -136,7 +136,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
                     final total = order['total_amount'] ?? '0.00';
                     final status = order['order_status'] ?? 'PENDING';
                     return ListTile(
-                      title: Text('Order #$orderId ($status)'),
+                      title: Text('${UserSession.formatOrderCode(orderId)} ($status)'),
                       subtitle: Text('Total: ₱$total'),
                       onTap: () => Navigator.pop(context, order),
                     );
@@ -158,15 +158,17 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
 
         final rawParentId = selectedOrder['id'] ?? selectedOrder['order_id'];
         UserSession.targetParentOrderId = rawParentId?.toString();
-      } else {
+      } else if (_unfinishedOrders.isNotEmpty) {
         // Kung iisa lang ang unfinished order, i-default na agad iyon
         final firstOrder = _unfinishedOrders.first;
         final rawParentId = firstOrder['id'] ?? firstOrder['order_id'];
         UserSession.targetParentOrderId = rawParentId?.toString();
       }
     } else {
-      // Linisin nang buo para sa New Order
-      UserSession.resetForNewOrder();
+      // NAPAKA-IMPORTANTE: Linisin nang buo para sa New Order para hindi sumama sa lumang ticket
+      UserSession.isAdditionalOrder = false;
+      UserSession.targetParentOrderId = null;
+      UserSession.lastPlacedOrderId = null;
     }
 
     if (!mounted) return;

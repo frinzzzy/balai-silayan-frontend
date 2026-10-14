@@ -76,6 +76,18 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         _fetchSessionBillData(refresh: true);
       }
     });
+    _socket.on('additional_items_added', (event) {
+      if (!mounted || event is! Map) return;
+      final int? eventSessionId = int.tryParse(
+        (event['session_id'] ?? '').toString(),
+      );
+      final int? activeSessionId =
+          UserSession.activeSessionId ??
+          int.tryParse(UserSession.sessionId ?? '');
+      if (eventSessionId == activeSessionId || eventSessionId == null) {
+        _fetchSessionBillData(refresh: true);
+      }
+    });
     _socket.on('table_session_closed', (event) {
       if (!mounted || event is! Map) return;
       final int? eventSessionId = int.tryParse(
@@ -110,8 +122,13 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   Future<void> _fetchSessionBillData({bool refresh = false}) async {
     final int? sessionId =
         UserSession.activeSessionId ??
-        int.tryParse(UserSession.sessionId ?? '');
-    final String? sessionToken = UserSession.customerSessionToken;
+            int.tryParse(UserSession.sessionId ?? '');
+
+    // Pinag-isang fallback para masiguro na nasasalo ang token saan mang variable nailagay
+    final String? sessionToken =
+        UserSession.customerSessionToken ??
+            UserSession.authToken ??
+            UserSession.qrToken;
 
     if (sessionId == null || sessionToken == null || sessionToken.isEmpty) {
       if (!mounted) return;
@@ -130,12 +147,12 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     try {
       final response = await http
           .get(
-            Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
-            headers: {
-              'Authorization': 'Bearer $sessionToken',
-              'Content-Type': 'application/json',
-            },
-          )
+        Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
+        headers: {
+          'Authorization': 'Bearer $sessionToken',
+          'Content-Type': 'application/json',
+        },
+      )
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
@@ -159,23 +176,22 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             List itemsList = nestedItems.isNotEmpty
                 ? nestedItems
                 : rawSessionItems
-                      .where(
-                        (item) =>
-                            (item['order_id'] ?? '').toString() == orderId,
-                      )
-                      .toList();
+                .where(
+                  (item) =>
+              (item['order_id'] ?? '').toString() == orderId,
+            )
+                .toList();
             List<Map<String, dynamic>> parsedItems = [];
 
             if (itemsList.isNotEmpty) {
               for (var i in itemsList) {
-                // Determine unit price vs line total accurately
                 double rawPrice = _parseDouble(i['unit_price'] ?? i['price']);
                 int qty = i['quantity'] ?? 1;
                 double addonUnitTotal = _parseDouble(i['addon_total']);
                 if (addonUnitTotal == 0 && i['addons'] is List) {
                   addonUnitTotal = (i['addons'] as List).fold<double>(
                     0,
-                    (sum, addon) => sum + _parseDouble(addon['price']),
+                        (sum, addon) => sum + _parseDouble(addon['price']),
                   );
                 }
                 final double lineFoodTotal = rawPrice * qty;
@@ -210,8 +226,8 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             computedGrandTotal += finalOrderTotal;
 
             String rawOrderCode =
-                (o['client_order_id'] ?? o['id'] ?? o['order_id'] ?? 'ORD')
-                    .toString();
+            (o['client_order_id'] ?? o['id'] ?? o['order_id'] ?? 'ORD')
+                .toString();
             String formattedCode = rawOrderCode.length > 8
                 ? '#${rawOrderCode.substring(0, 8).toUpperCase()}'
                 : '#ORD-$rawOrderCode';
@@ -221,16 +237,15 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
               "status": o['order_status'] ?? o['status'] ?? "PENDING",
               "time": o['created_at'] != null
                   ? DateTime.parse(o['created_at'])
-                        .toLocal()
-                        .toString()
-                        .substring(11, 16)
+                  .toLocal()
+                  .toString()
+                  .substring(11, 16)
                   : "01:53",
               "items": parsedItems,
               "order_total": finalOrderTotal,
             });
           }
 
-          // Fallback check if top-level grand total exists and items array was empty
           double rootTotal = _parseDouble(
             data['total_amount'] ?? data['grand_total'],
           );

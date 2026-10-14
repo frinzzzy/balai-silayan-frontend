@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'qr_scanner_screen.dart';
+import 'admin_dashboard_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,6 +13,10 @@ Future<void> main() async {
 
 class ProductionSoftEngApp extends StatelessWidget {
   const ProductionSoftEngApp({super.key});
+
+  // Toggle this to true to boot directly into the Admin Dashboard for testing/presentation,
+  // or false to boot into the normal Customer QR Scanner screen.
+  static const bool showAdminDashboardDirectly = false;
 
   @override
   Widget build(BuildContext context) {
@@ -48,7 +53,9 @@ class ProductionSoftEngApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const QrScannerScreen(),
+      home: showAdminDashboardDirectly
+          ? const AdminDashboardScreen()
+          : const QrScannerScreen(),
     );
   }
 }

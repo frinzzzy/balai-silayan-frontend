@@ -8,9 +8,7 @@ class UserSession {
   static String? authToken;
   static String? customerSessionToken;
 
-  // ITAMA ITO: Dapat false kapag nagsisimula ng bagong sesyon o bagong order
   static bool isAdditionalOrder = false;
-
   static String? targetParentOrderId;
   static dynamic firstOrderId;
   static dynamic lastPlacedOrderId;
@@ -18,26 +16,78 @@ class UserSession {
   static List<dynamic> lastPlacedOrderItems = [];
 
   static bool get isLoggedIn => authToken != null && authToken!.isNotEmpty;
-  static bool get hasActiveSession =>
-      activeSessionId != null || sessionId != null;
 
+  static String formatOrderCode(dynamic orderId) {
+    if (orderId == null) return '#BS-0001';
+    final str = orderId.toString().trim();
+    if (str.startsWith('#')) return str;
+
+    final intVal = int.tryParse(str);
+    if (intVal != null) {
+      if (intVal > 9999) {
+        final code = intVal.toRadixString(36).toUpperCase().padLeft(5, '0');
+        return '#BS-$code';
+      }
+      return '#BS-${intVal.toString().padLeft(4, '0')}';
+    }
+
+    final cleanStr = str.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toUpperCase();
+    return '#BS-${cleanStr.length > 5 ? cleanStr.substring(0, 5) : cleanStr.padLeft(5, '0')}';
+  }
+
+  // Pinatibay na check para sa active session
+  static bool get hasActiveSession =>
+      (activeSessionId != null && activeSessionId! > 0) ||
+          (sessionId != null && sessionId!.isNotEmpty);
+
+  // Pinag-isang getter para sa lahat ng uri ng active token
+  static String? get activeSessionToken =>
+      customerSessionToken ?? authToken ?? qrToken;
+
+  // Pinatibay na setSession para masigurong nasasalo kahit anong format ng ID o token
   static void setSession({
     int? tableId,
     int? tableNumber,
-    int? sessionNum,
+    dynamic sessionNum,
     String? token,
     String? qr,
     bool takeout = false,
   }) {
-    activeTableId = tableId;
-    activeTableNumber = tableNumber;
-    activeSessionId = sessionNum;
-    if (token != null) authToken = token;
-    if (qr != null) qrToken = qr;
+    if (tableId != null) activeTableId = tableId;
+    if (tableNumber != null) {
+      activeTableNumber = tableNumber;
+    } else if (tableId != null) {
+      activeTableNumber = tableId;
+    }
+
+    if (sessionNum != null) {
+      activeSessionId = sessionNum is int ? sessionNum : int.tryParse(sessionNum.toString());
+      sessionId = activeSessionId?.toString();
+    }
+
+    if (token != null && token.isNotEmpty) {
+      customerSessionToken = token;
+      authToken = token;
+    }
+    if (qr != null && qr.isNotEmpty) {
+      qrToken = qr;
+    }
     isTakeout = takeout;
   }
 
-  // Idinagdag ito para linisin ang order flags tuwing New Order ang pinipili
+  // Ginagamit pagkatapos mag-submit ng order para i-store ang huling order details
+  static void setLastPlacedOrder({
+    required dynamic orderId,
+    required double total,
+    List<dynamic>? items,
+  }) {
+    lastPlacedOrderId = orderId;
+    lastPlacedOrderTotal = total;
+    if (items != null) {
+      lastPlacedOrderItems = items;
+    }
+  }
+
   static void resetForNewOrder() {
     isAdditionalOrder = false;
     targetParentOrderId = null;
@@ -56,11 +106,6 @@ class UserSession {
     qrToken = null;
     authToken = null;
     customerSessionToken = null;
-    isAdditionalOrder = false; // Naka-reset din dito
-    targetParentOrderId = null;
-    firstOrderId = null;
-    lastPlacedOrderId = null;
-    lastPlacedOrderTotal = 0.0;
-    lastPlacedOrderItems = [];
+    resetForNewOrder();
   }
 }

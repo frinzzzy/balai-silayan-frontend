@@ -30,6 +30,9 @@ class ShoppingCartScreen extends StatefulWidget {
 class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   late Map<FoodItem, int> _editableCart;
   late double _calculatedTotal;
+  bool _isLoadingParentItems = false;
+  List<dynamic> _sessionOrdersSummary = [];
+  double _sessionGrandTotal = 0.0;
 
   String get _baseUrl {
     if (kIsWeb) return 'http://localhost:5000';
@@ -42,86 +45,56 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     super.initState();
     _editableCart = Map.from(widget.cart);
     _calculatedTotal = widget.total;
-    if (widget.isAdditionalOrder || UserSession.isAdditionalOrder) {
-      _fetchParentOrderItemsIfNeeded();
-    }
+    _fetchOrdersSummary();
   }
 
-  Future<void> _fetchParentOrderItemsIfNeeded() async {
-    final parentId = UserSession.targetParentOrderId ?? UserSession.firstOrderId;
-    if (parentId == null) return;
+  Future<void> _fetchOrdersSummary() async {
+    final sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+
+    // Pinag-isang fallback para masiguro na hindi null ang token
+    final sessionToken = UserSession.customerSessionToken ?? UserSession.authToken ?? UserSession.qrToken;
+
+    if (sessionId == null) return;
+
+    setState(() => _isLoadingParentItems = true);
 
     try {
-      var response = await http.get(
-        Uri.parse('$_baseUrl/api/v1/orders/$parentId'),
+      final Map<String, String> headers = {"Content-Type": "application/json"};
+      if (sessionToken != null && sessionToken.isNotEmpty) {
+        headers["Authorization"] = "Bearer $sessionToken";
+      }
+
+      // Siguraduhing tamang endpoint ang tinatawagan (/bill kung saan galing ang buong session summary)
+      final response = await http.get(
+        Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
+        headers: headers,
       );
 
-      Map<String, dynamic>? targetOrder;
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
-        if (resData['data'] != null && resData['data'] is Map) {
-          targetOrder = Map<String, dynamic>.from(resData['data']);
+        final data = resData['data'];
+        if (data != null) {
+          final List orders = data['orders'] ?? data['items'] ?? [];
+          final double grandTotal = double.tryParse(
+            data['grand_total']?.toString() ?? data['total_amount']?.toString() ?? '0',
+          ) ?? 0.0;
+
+          setState(() {
+            _sessionOrdersSummary = orders;
+            _sessionGrandTotal = grandTotal;
+          });
         }
       }
-
-      if (targetOrder == null) {
-        response = await http.get(
-          Uri.parse('$_baseUrl/api/v1/orders'),
-        );
-        if (response.statusCode == 200) {
-          final resData = jsonDecode(response.body);
-          final List ordersList = resData['data'] ?? [];
-          for (final o in ordersList) {
-            final idStr = (o['order_id'] ?? o['id'] ?? '').toString();
-            if (idStr == parentId.toString()) {
-              targetOrder = Map<String, dynamic>.from(o);
-              break;
-            }
-          }
-        }
-      }
-
-      if (targetOrder != null) {
-        final List items = targetOrder['items'] ?? [];
-        for (final itemMap in items) {
-          final String name = itemMap['name'] ?? 'Dish Item';
-          final double price = double.tryParse(itemMap['unit_price']?.toString() ?? itemMap['price']?.toString() ?? '0') ?? 0.0;
-          final int qty = int.tryParse(itemMap['quantity']?.toString() ?? '1') ?? 1;
-          final int itemId = int.tryParse(itemMap['menu_item_id']?.toString() ?? itemMap['item_id']?.toString() ?? '1') ?? 1;
-
-          FoodItem? existing;
-          for (final key in _editableCart.keys) {
-            if (key.itemDbId == itemId || key.name == name) {
-              existing = key;
-              break;
-            }
-          }
-
-          if (existing != null) {
-            _editableCart[existing] = (_editableCart[existing] ?? 0) + qty;
-          } else {
-            final foodItem = FoodItem(
-              itemDbId: itemId,
-              name: name,
-              price: price,
-              categoryId: 1,
-              isAvailable: true,
-            );
-            _editableCart[foodItem] = qty;
-          }
-        }
-        if (mounted) {
-          _recalculateTotal();
-        }
-      }
-    } catch (_) {}
+    } catch (_) {} finally {
+      if (mounted) setState(() => _isLoadingParentItems = false);
+    }
   }
 
   void _recalculateTotal() {
     setState(() {
       _calculatedTotal = _editableCart.entries.fold(
         0.0,
-            (sum, entry) => sum + (entry.key.price * entry.value),
+            (sum, entry) => sum + (entry.key.price * entry.value), // Naayos ang '*' operator at tinanggal ang '-'
       );
     });
   }
@@ -161,16 +134,38 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
             _buildRestaurantHeader(),
             _buildTableContextStrip(tableString),
             Expanded(
-              child: SingleChildScrollView(
+              child: _isLoadingParentItems
+                  ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFF203F35)),
+              )
+                  : SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _buildIntroductionHeader(),
                     const SizedBox(height: 20),
-                    if (_editableCart.isEmpty)
+                    if (_sessionOrdersSummary.isNotEmpty) ...[
+                      const Text(
+                        'Active Table Tickets',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                      ),
+                      const SizedBox(height: 12),
+                      ..._sessionOrdersSummary.asMap().entries.map((entry) {
+                        final index = entry.key;
+                        final order = entry.value;
+                        return _buildTicketGroupCard(index + 1, order);
+                      }),
+                      const SizedBox(height: 24),
+                    ],
+                    if (_editableCart.isEmpty && _sessionOrdersSummary.isEmpty)
                       _buildEmptyCartView()
-                    else ...[
+                    else if (_editableCart.isNotEmpty) ...[
+                      const Text(
+                        'New Cart Items',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                      ),
+                      const SizedBox(height: 12),
                       ..._editableCart.entries.map((entry) => _buildCartItemCard(entry.key, entry.value)),
                       const SizedBox(height: 12),
                       _buildPriceBreakdownCard(),
@@ -183,6 +178,69 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildTicketGroupCard(int ticketNum, dynamic order) {
+    final String orderCode = order['order_code'] ?? '#BS-${order['order_id'] ?? ticketNum}';
+    final String status = (order['status'] ?? order['order_status'] ?? 'PENDING').toString().toUpperCase();
+    final double orderTotal = double.tryParse(order['total_amount']?.toString() ?? order['order_total']?.toString() ?? '0') ?? 0.0;
+    final List items = order['items'] ?? [];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFDFA),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE5DFD3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Ticket #$ticketNum ($orderCode)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF203F35))),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEE7D9),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(status, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFFA47C3D))),
+              ),
+            ],
+          ),
+          const Divider(height: 20, color: Color(0xFFE5DFD3)),
+          if (items.isEmpty)
+            const Text('No items in this ticket.', style: TextStyle(fontSize: 12, color: Color(0xFF788078)))
+          else
+            ...items.map((i) {
+              final name = i['name'] ?? i['item_name'] ?? 'Dish Item';
+              final qty = i['quantity'] ?? 1;
+              final price = double.tryParse(i['unit_price']?.toString() ?? i['price']?.toString() ?? '0') ?? 0.0;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(child: Text('$qty x $name', style: const TextStyle(fontSize: 13, color: Color(0xFF24382F)))),
+                    Text('₱${(price * qty).toStringAsFixed(0)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+                  ],
+                ),
+              );
+            }),
+          const Divider(height: 20, color: Color(0xFFE5DFD3)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Ticket Total', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF788078))),
+              Text('₱${orderTotal.toStringAsFixed(0)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF203F35))),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -291,7 +349,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '$orderTag • $_totalItemCount ITEMS',
+          '$orderTag\n$_totalItemCount ITEMS', // Naayos ang string interpolation syntax
           style: const TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w700,
@@ -359,7 +417,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildCartItemCard(FoodItem item, int quantity) {
-    final double itemTotal = item.price * quantity;
+    final double itemTotal = item.price * quantity; // Naayos ang '*' operator
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -395,7 +453,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                       const Icon(Icons.restaurant_outlined, size: 24, color: Color(0xFF203F35)),
                       const SizedBox(height: 2),
                       Text(
-                        item.name.substring(0, 1),
+                        item.name.isNotEmpty ? item.name.substring(0, 1) : 'D',
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFFA47C3D)),
                       ),
                     ],
@@ -488,6 +546,8 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildPriceBreakdownCard() {
+    final double combinedGrandTotal = _calculatedTotal + _sessionGrandTotal;
+
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -507,16 +567,16 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Food & drinks', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
-              Text('₱${_calculatedTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+              const Text('Active Tickets Total', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
+              Text('₱${_sessionGrandTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
             ],
           ),
           const SizedBox(height: 8),
-          const Row(
+          Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Selected add-ons', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
-              Text('₱0', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+              const Text('New Cart Items Total', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
+              Text('₱${_calculatedTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
             ],
           ),
           const Padding(
@@ -526,9 +586,9 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Total', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF24382F))),
+              const Text('Grand Total', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF24382F))),
               Text(
-                '₱${_calculatedTotal.toStringAsFixed(0)}',
+                '₱${combinedGrandTotal.toStringAsFixed(0)}',
                 style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
               ),
             ],
@@ -544,6 +604,8 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildActionButtonsArea() {
+    final double combinedGrandTotal = _calculatedTotal + _sessionGrandTotal;
+
     return Column(
       children: [
         SizedBox(
@@ -561,7 +623,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                 MaterialPageRoute(
                   builder: (context) => CheckoutScreen(
                     cart: _editableCart,
-                    total: _calculatedTotal,
+                    total: combinedGrandTotal,
                     tableId: widget.tableId,
                     isTakeout: widget.isTakeout,
                     isAdditionalOrder: widget.isAdditionalOrder,
@@ -573,7 +635,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  'Review order • ₱${_calculatedTotal.toStringAsFixed(0)}',
+                  'Review order • ₱${combinedGrandTotal.toStringAsFixed(0)}',
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                 ),
                 const SizedBox(width: 8),
