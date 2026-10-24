@@ -2,15 +2,10 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/user_session.dart';
+import '../config/api_config.dart';
 
 class ApiService {
-  static String get _baseUrl {
-    if (kIsWeb) return 'http://localhost:5000';
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:5000';
-    }
-    return 'http://localhost:5000';
-  }
+  static String get _baseUrl => ApiConfig.baseUrl;
 
   static Map<String, String> get _authHeaders {
     final token = UserSession.customerSessionToken ?? UserSession.authToken;

@@ -6,8 +6,6 @@ import 'dart:convert';
 
 import '../../menu_screen.dart' as root_menu;
 import '../../checkout_screen.dart';
-import '../../kitchen_screen.dart';
-import '../../waiter_screen.dart';
 import '../../assistance_screen.dart';
 import '../../orders_screen.dart';
 import '../../order_status_screen.dart';
@@ -24,6 +22,57 @@ class FoodItem {
   final double price;
   final int categoryId;
   final bool isAvailable;
+  final String? imageUrl;
+
+  static final Map<int, String> hardcodedImageUrls = {
+    1: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624', // Bihon
+    2: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624', // Mike Bihon
+    3: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841', // Pansit Canton
+    4: 'https://images.unsplash.com/photo-1552611052-33e04de081de', // Pansit Bihon Guisado
+    5: 'https://images.unsplash.com/photo-1621996346565-e3d5d6281222', // Filipino Style Spaghetti
+    6: 'https://images.unsplash.com/photo-1633964913295-ceb43826e7c9', // Creamy Carbonara
+    7: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6', // Baked Macaroni
+    8: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af', // Clubhouse Sandwich W/ Fries
+    9: 'https://images.unsplash.com/photo-1550547660-d9450f859349', // Ham and Cheese Sandwich
+    10: 'https://images.unsplash.com/photo-1539252554453-80ab65ce3586', // Tuna Melt Sandwich
+    11: 'https://images.unsplash.com/photo-1567620832903-9fc6debc209f', // Plain Wings
+    12: 'https://images.unsplash.com/photo-1608039829572-78524f79c4c7', // Buffalo Wings
+    13: 'https://images.unsplash.com/photo-1527477396000-e27163b481c2', // Honey Garlic Wings
+    14: 'https://images.unsplash.com/photo-1540420773420-3366772f4999', // Caesar Salad
+    15: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd', // Chopsuey
+    16: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c', // Pinakbet
+    17: 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1', // Kare-Kare (Labot)
+    18: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6', // Bulalo Special
+    19: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624', // Sinigang na Baboy
+    20: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46', // Sizzling Chicken
+    21: 'https://images.unsplash.com/photo-1544025162-d76694265947', // Sizzling Pork Sisig
+    22: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c', // Sizzling Tofu
+    23: 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877', // French Fries
+    24: 'https://images.unsplash.com/photo-1513456852971-30c0b8199d4d', // Nachos Supreme
+    25: 'https://images.unsplash.com/photo-1534422298391-e4f8c172dddb', // Fish and Chips
+    26: 'https://images.unsplash.com/photo-1555126634-323283e090fa', // Tapsilog
+    27: 'https://images.unsplash.com/photo-1544025162-d76694265947', // Porksilog
+    28: 'https://images.unsplash.com/photo-1567620832903-9fc6debc209f', // Chickensilog
+    29: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2', // Bangusilog
+    30: 'https://images.unsplash.com/photo-1513104890138-7c749659a591', // Super Supreme Pizza
+    31: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38', // Hawaiian Overload
+    32: 'https://images.unsplash.com/photo-1534308983496-4fabb1a015ee', // Pepperoni Classic
+    33: 'https://images.unsplash.com/photo-1548839140-29a749e1cf4d', // Bottled Water
+    34: 'https://images.unsplash.com/photo-1556679343-c7306c1976bc', // Iced Tea (Glass)
+    35: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd', // Blue Lemonade
+    36: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97', // Coke Regular (330ml)
+    37: 'https://images.unsplash.com/photo-1625772299848-391b6a87d7b3', // Sprite (330ml)
+    38: 'https://images.unsplash.com/photo-1516684732162-798a0062be99', // Plain Rice (Solo)
+    39: 'https://images.unsplash.com/photo-1512058564366-18510be2db19', // Garlic Rice
+    40: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6', // Java Rice
+    41: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb', // Halo-Halo Special
+    42: 'https://images.unsplash.com/photo-1509440159596-0249088772ff', // Leche Flan
+    43: 'https://images.unsplash.com/photo-1488477181946-6428a0291777', // Mango Panna Cotta
+    44: 'https://images.unsplash.com/photo-1553163147-622ab57be1c2', // Bibimbap
+    45: 'https://images.unsplash.com/photo-1590301157890-4810ed352733', // Kimchi Fried Rice
+    46: 'https://images.unsplash.com/photo-1541658016709-82535e94bc69', // Tteokbokki
+    47: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624', // Ramen with Cheese
+  };
 
   FoodItem({
     required this.itemDbId,
@@ -31,15 +80,21 @@ class FoodItem {
     required this.price,
     required this.categoryId,
     this.isAvailable = true,
-  });
+    String? imageUrl,
+  }) : imageUrl = imageUrl ?? hardcodedImageUrls[itemDbId] ?? 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624';
 
   factory FoodItem.fromJson(Map<String, dynamic> json) {
+    final int id = json['id'] ?? 0;
+    final String? dbImg = json['image_url'];
+    final String fallbackImg = hardcodedImageUrls[id] ?? 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624';
+
     return FoodItem(
-      itemDbId: json['id'] ?? 0,
+      itemDbId: id,
       name: json['name'] ?? 'Delicious Dish',
       price: double.tryParse(json['price']?.toString() ?? '0.0') ?? 0.0,
       categoryId: json['category_id'] ?? 1,
       isAvailable: json['is_available'] ?? true,
+      imageUrl: (dbImg != null && dbImg.isNotEmpty) ? dbImg : fallbackImg,
     );
   }
 }
@@ -1426,32 +1481,6 @@ class _MenuScreenState extends State<MenuScreen> {
                   context,
                   MaterialPageRoute(
                     builder: (context) => const OrdersScreen(cartItems: []),
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(
-                  Icons.person_pin_outlined,
-                  color: Color(0xFF203F35),
-                  size: 22,
-                ),
-                tooltip: 'Waiter Control',
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const WaiterScreen()),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(
-                  Icons.soup_kitchen_outlined,
-                  color: Color(0xFF203F35),
-                  size: 22,
-                ),
-                tooltip: 'Kitchen Display',
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const KitchenScreen(),
                   ),
                 ),
               ),

@@ -4,8 +4,10 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 import 'order_status_screen.dart';
+import 'order_type_selection_screen.dart';
 import 'menu_screen.dart';
 import 'user_session.dart';
+import 'config/api_config.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final Map<FoodItem, int> cart;
@@ -31,6 +33,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   bool _isSubmitting = false;
   late Map<FoodItem, int> _editableCart;
   late double _calculatedTotal;
+
+  String get _baseUrl => ApiConfig.baseUrl;
 
   @override
   void initState() {
@@ -146,15 +150,30 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }
 
     final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
+
+    // AUTO-HEAL: Kung isAdditional ay true ngunit walang targetParentOrderId, kumuha mula sa unfinished orders ng table
+    if (isAdditional && (UserSession.targetParentOrderId == null || UserSession.targetParentOrderId!.isEmpty)) {
+      try {
+        final res = await http.get(Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$targetTableId'));
+        if (res.statusCode == 200) {
+          final decoded = jsonDecode(res.body);
+          final List orders = decoded['orders'] ?? decoded['data'] ?? [];
+          if (orders.isNotEmpty) {
+            final activeParent = orders.first;
+            UserSession.targetParentOrderId = (activeParent['order_id'] ?? activeParent['id']).toString();
+          }
+        }
+      } catch (_) {}
+    }
     
-    dynamic rawParentId = UserSession.targetParentOrderId ?? UserSession.firstOrderId;
+    dynamic rawParentId = isAdditional ? (UserSession.targetParentOrderId ?? UserSession.firstOrderId) : null;
     int? parsedParentOrderId;
     if (rawParentId != null) {
       parsedParentOrderId = int.tryParse(rawParentId.toString());
     }
 
-    final bool safeIsAdditional = isAdditional || parsedParentOrderId != null;
-    final dynamic finalParentId = parsedParentOrderId;
+    final bool safeIsAdditional = isAdditional && parsedParentOrderId != null;
+    final dynamic finalParentId = safeIsAdditional ? parsedParentOrderId : null;
 
     final Map<String, dynamic> transactionBody = {
       "table_id": targetTableId,
@@ -297,6 +316,44 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           } catch (_) {}
         }
 
+        // AUTO-HEAL KUNG 404 PARENT ORDER NOT FOUND
+        if (response.statusCode == 404 && errorMessage.toLowerCase().contains('parent order')) {
+          UserSession.targetParentOrderId = null;
+          UserSession.isAdditionalOrder = false;
+          UserSession.firstOrderId = null;
+
+          transactionBody["is_additional_order"] = false;
+          transactionBody["parent_order_id"] = null;
+
+          try {
+            final retryResponse = await http.post(
+              Uri.parse('http://localhost:5000/api/v1/orders'),
+              headers: reqHeaders,
+              body: jsonEncode(transactionBody),
+            );
+
+            if (retryResponse.statusCode == 201 || retryResponse.statusCode == 200) {
+              final Map<String, dynamic> retryData = jsonDecode(retryResponse.body);
+              final dynamic createdOrderData = retryData['data']?['order'] ?? retryData['data'];
+              final dynamic generatedOrderId = createdOrderData?['id'] ?? createdOrderData?['order_id'] ?? DateTime.now().millisecondsSinceEpoch;
+
+              UserSession.lastPlacedOrderId = generatedOrderId;
+              UserSession.lastPlacedOrderTotal = _calculatedTotal;
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Order submitted successfully as a new ticket!'),
+                    backgroundColor: Color(0xFF203F35),
+                  ),
+                );
+                _navigateToStatusTracking(generatedOrderId);
+              }
+              return;
+            }
+          } catch (_) {}
+        }
+
         _handleOrderSubmissionError(errorMessage);
       }
     } catch (e) {
@@ -307,6 +364,42 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   void _handleOrderSubmissionError(String errorDetails) {
     if (!mounted) return;
     setState(() => _isSubmitting = false);
+
+    final String lowerErr = errorDetails.toLowerCase();
+    if (widget.isAdditionalOrder || lowerErr.contains('complete') || lowerErr.contains('closed') || lowerErr.contains('settled') || lowerErr.contains('finished') || lowerErr.contains('not active') || lowerErr.contains('failed to create order') || lowerErr.contains('parent order')) {
+      UserSession.clearSession();
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFFFFFDFA),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: const Text('Session Complete', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+          content: const Text('Can’t be ordered because this session is complete. Please back to order choices.'),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+              onPressed: () {
+                Navigator.pop(ctx);
+                final int tableNum = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => OrderTypeSelectionScreen(
+                      tableId: tableNum,
+                      tableNumber: tableNum,
+                    ),
+                  ),
+                  (route) => false,
+                );
+              },
+              child: const Text('Back to Order Choices', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

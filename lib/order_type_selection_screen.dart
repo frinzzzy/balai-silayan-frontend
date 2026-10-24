@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-
 import 'dart:convert';
 
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
+import 'qr_scanner_screen.dart';
 import 'user_session.dart';
+import 'order_status_screen.dart'; // I-import ang OrderStatusScreen para direktang matawag
 
 class OrderTypeSelectionScreen extends StatefulWidget {
   final int tableNumber;
@@ -118,54 +119,97 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
     if (isAdditional && hasUnfinished) {
       UserSession.isAdditionalOrder = true;
 
-      // Kung mahigit sa isa ang unfinished order, hayaan nating mamili ang user kung aling order ang lalagyan ng add-on
-      if (_unfinishedOrders.length > 1) {
-        final selectedOrder = await showDialog<Map<dynamic, dynamic>>(
+      // Kung Additional Order, mamimili kung aling unfinished order ang lalagyan ng add-on
+      final selectedOrder = await _showSelectOrderDialog(
+        title: 'Select Order to Add Items',
+        subtitle: 'Choose which ticket to link your additional items to.',
+      );
+
+      if (selectedOrder == null) return;
+
+      final rawParentId = selectedOrder['id'] ?? selectedOrder['order_id'];
+      UserSession.targetParentOrderId = rawParentId?.toString();
+    } else {
+      // NEW ORDER FLOW: Kung may mga lumang orders, bigyan ng pagpipilian ang user
+      if (hasUnfinished) {
+        final actionChoice = await showDialog<String>(
           context: context,
           builder: (BuildContext context) {
             return AlertDialog(
-              title: const Text('Select Order to Add Items'),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _unfinishedOrders.length,
-                  itemBuilder: (context, index) {
-                    final order = _unfinishedOrders[index];
-                    final orderId = order['id'] ?? order['order_id'];
-                    final total = order['total_amount'] ?? '0.00';
-                    final status = order['order_status'] ?? 'PENDING';
-                    return ListTile(
-                      title: Text('${UserSession.formatOrderCode(orderId)} ($status)'),
-                      subtitle: Text('Total: ₱$total'),
-                      onTap: () => Navigator.pop(context, order),
-                    );
-                  },
+              backgroundColor: const Color(0xFFFFFDFA),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              title: const Text(
+                'Existing Table Orders',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF203F35),
                 ),
+              ),
+              content: const Text(
+                'Would you like to view your live monitoring tickets, or proceed with a brand new separate order?',
+                style: TextStyle(color: Color(0xFF788078), fontSize: 14),
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context, null),
-                  child: const Text('Cancel'),
+                  onPressed: () => Navigator.pop(context, 'view_tickets'),
+                  child: const Text(
+                    'View Tickets',
+                    style: TextStyle(color: Color(0xFF53766C)),
+                  ),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF203F35),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onPressed: () => Navigator.pop(context, 'brand_new'),
+                  child: const Text(
+                    'Start New Order',
+                    style: TextStyle(color: Colors.white),
+                  ),
                 ),
               ],
             );
           },
         );
 
-        // Kung pinindot ang cancel o walang pinili, huwag ituloy ang pag-navigate
-        if (selectedOrder == null) return;
+        if (actionChoice == 'view_tickets') {
+          // Ipakita ang listahan ng mga existing tickets para mapili at direktang mapuntahan ang OrderStatusScreen
+          final selectedTicket = await _showSelectOrderDialog(
+            title: 'Live Monitoring Tickets',
+            subtitle: 'Select a ticket to review live status.',
+          );
 
-        final rawParentId = selectedOrder['id'] ?? selectedOrder['order_id'];
-        UserSession.targetParentOrderId = rawParentId?.toString();
-      } else if (_unfinishedOrders.isNotEmpty) {
-        // Kung iisa lang ang unfinished order, i-default na agad iyon
-        final firstOrder = _unfinishedOrders.first;
-        final rawParentId = firstOrder['id'] ?? firstOrder['order_id'];
-        UserSession.targetParentOrderId = rawParentId?.toString();
+          if (selectedTicket != null && mounted) {
+            final ticketId = selectedTicket['id'] ?? selectedTicket['order_id'];
+            final totalAmt = double.tryParse(selectedTicket['total_amount']?.toString() ?? '0') ?? 0.0;
+            final itemsList = selectedTicket['items'] is List ? selectedTicket['items'] : [];
+
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => OrderStatusScreen(
+                  orderId: ticketId,
+                  isTakeout: false,
+                  tableId: _resolvedTableId ?? widget.tableId,
+                  totalAmount: totalAmt,
+                  isAdditionalOrder: false,
+                  initialOrderItems: itemsList,
+                ),
+              ),
+            );
+          }
+          return;
+        } else if (actionChoice == null) {
+          return; // Kinansela ng user
+        }
       }
-    } else {
-      // NAPAKA-IMPORTANTE: Linisin nang buo para sa New Order para hindi sumama sa lumang ticket
+
+      // Brand New Order Settings (Gagawin itong malinis)
       UserSession.isAdditionalOrder = false;
       UserSession.targetParentOrderId = null;
       UserSession.lastPlacedOrderId = null;
@@ -182,6 +226,95 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
           isAdditionalOrder: isAdditional,
         ),
       ),
+    );
+  }
+
+  Future<Map<dynamic, dynamic>?> _showSelectOrderDialog({
+    required String title,
+    required String subtitle,
+  }) async {
+    return await showDialog<Map<dynamic, dynamic>>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFFFFFDFA),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          title: Text(
+            title,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF203F35),
+            ),
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF788078),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: _unfinishedOrders.length,
+                    itemBuilder: (context, index) {
+                      final order = _unfinishedOrders[index];
+                      final orderId = order['id'] ?? order['order_id'];
+                      final total = order['total_amount'] ?? '0.00';
+                      final status = order['order_status'] ?? 'PENDING';
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8F4EC),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFE5DFD3)),
+                        ),
+                        child: ListTile(
+                          title: Text(
+                            '${UserSession.formatOrderCode(orderId)} ($status)',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF203F35),
+                            ),
+                          ),
+                          subtitle: Text(
+                            'Total: ₱$total',
+                            style: const TextStyle(color: Color(0xFF788078)),
+                          ),
+                          trailing: const Icon(
+                            Icons.arrow_forward_ios,
+                            size: 14,
+                            color: Color(0xFFA47C3D),
+                          ),
+                          onTap: () => Navigator.pop(context, order),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, null),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF788078)),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -234,8 +367,6 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
         const SizedBox(height: 24),
         _buildIntroductionSection(),
         const SizedBox(height: 16),
-
-        // Unfinished Order Indicator Badge
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
@@ -264,12 +395,8 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
           ),
         ),
         const SizedBox(height: 20),
-
-        // New Order Box (Pindutin ito para piliting maging New Order)
         _buildNewOrderOptionCard(),
         const SizedBox(height: 14),
-
-        // Additional Order Box (Magiging clickable lang kung may unfinished orders)
         _buildAdditionalOrderOptionCard(hasUnfinished: hasUnfinished),
         const SizedBox(height: 20),
         _buildContextNoteBox(),
@@ -277,14 +404,63 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
     );
   }
 
-
   Widget _buildRestaurantHeader() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         InkWell(
-          onTap: () {
-            Navigator.maybePop(context);
+          onTap: () async {
+            final bool? changeTable = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: const Color(0xFFFFFDFA),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                title: const Text(
+                  'Change Table?',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF203F35),
+                  ),
+                ),
+                content: const Text(
+                  'Do you want to change table? This will clear your current table session.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text(
+                      'No',
+                      style: TextStyle(color: Color(0xFF788078)),
+                    ),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF203F35),
+                    ),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text(
+                      'Yes',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+
+            if (changeTable == true && mounted) {
+              UserSession.clearSession();
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const QrScannerScreen(),
+                ),
+              );
+            }
           },
           borderRadius: BorderRadius.circular(22),
           child: Container(
@@ -307,7 +483,10 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
               width: 26,
               height: 22,
               decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFFA47C3D), width: 1.4),
+                border: Border.all(
+                  color: const Color(0xFFA47C3D),
+                  width: 1.4,
+                ),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: const Icon(
@@ -332,7 +511,9 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (context) => const AssistanceScreen()),
+              MaterialPageRoute(
+                builder: (context) => const AssistanceScreen(),
+              ),
             );
           },
           borderRadius: BorderRadius.circular(22),
@@ -482,7 +663,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Start a separate order with its own number. Next, see your table’s unfinished orders.',
+              'Start a separate order or inspect your existing live monitoring tickets.',
               style: TextStyle(
                 fontSize: 13,
                 color: isSelected
@@ -591,7 +772,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
           SizedBox(width: 10),
           Expanded(
             child: Text(
-              'New and additional items are added to the same active table receipt.',
+              'New and additional items are handled cleanly via active table tickets and live status.',
               style: TextStyle(
                 fontSize: 12,
                 color: Color(0xFF53766C),
@@ -607,7 +788,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
   Widget _buildPrimaryActionButton() {
     String buttonText = _isAdditionalOrderSelected
         ? "Continue with Additional Items →"
-        : "Continue with New Items →";
+        : "Continue with New Order →";
 
     return SizedBox(
       width: double.infinity,

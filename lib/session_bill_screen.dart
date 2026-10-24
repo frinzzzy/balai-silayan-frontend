@@ -61,7 +61,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     _socket.onConnect((_) {
       final int? sessionId =
           UserSession.activeSessionId ??
-          int.tryParse(UserSession.sessionId ?? '');
+              int.tryParse(UserSession.sessionId ?? '');
       if (sessionId != null) _socket.emit('join_room', 'session_$sessionId');
     });
     _socket.on('order_updated', (event) {
@@ -71,7 +71,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
       );
       final int? activeSessionId =
           UserSession.activeSessionId ??
-          int.tryParse(UserSession.sessionId ?? '');
+              int.tryParse(UserSession.sessionId ?? '');
       if (eventSessionId == activeSessionId) {
         _fetchSessionBillData(refresh: true);
       }
@@ -83,7 +83,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
       );
       final int? activeSessionId =
           UserSession.activeSessionId ??
-          int.tryParse(UserSession.sessionId ?? '');
+              int.tryParse(UserSession.sessionId ?? '');
       if (eventSessionId == activeSessionId || eventSessionId == null) {
         _fetchSessionBillData(refresh: true);
       }
@@ -95,7 +95,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
       );
       final int? activeSessionId =
           UserSession.activeSessionId ??
-          int.tryParse(UserSession.sessionId ?? '');
+              int.tryParse(UserSession.sessionId ?? '');
       if (eventSessionId == activeSessionId && mounted) {
         setState(() => _sessionStatus = 'CLOSED');
       }
@@ -119,25 +119,39 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     return 0.0;
   }
 
-  Future<void> _fetchSessionBillData({bool refresh = false}) async {
-    final int? sessionId =
-        UserSession.activeSessionId ??
-            int.tryParse(UserSession.sessionId ?? '');
+  // Kinukuwenta muli ang total batay lamang sa mga napiling (checked) tickets
+  void _recalculateTotals() {
+    double computedGrandTotal = 0.0;
+    double computedFoodTotal = 0.0;
+    double computedAddOnsTotal = 0.0;
 
-    // Pinag-isang fallback para masiguro na nasasalo ang token saan mang variable nailagay
-    final String? sessionToken =
-        UserSession.customerSessionToken ??
-            UserSession.authToken ??
-            UserSession.qrToken;
+    for (var order in _sessionOrders) {
+      if (order['isSelected'] == true) {
+        double orderTotal = _parseDouble(order['order_total']);
+        computedGrandTotal += orderTotal;
 
-    if (sessionId == null || sessionToken == null || sessionToken.isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = 'Scan this table QR code to load the active bill.';
-        _isLoading = false;
-      });
-      return;
+        final List items = order['items'] ?? [];
+        for (var item in items) {
+          double unitPrice = _parseDouble(item['unit_price']);
+          int qty = item['quantity'] ?? 1;
+          double addonTotal = _parseDouble(item['addon_total']);
+
+          computedFoodTotal += (unitPrice * qty);
+          computedAddOnsTotal += (addonTotal * qty);
+        }
+      }
     }
+
+    setState(() {
+      _grandTotal = computedGrandTotal;
+      _foodDrinksTotal = computedFoodTotal > 0 ? computedFoodTotal : computedGrandTotal;
+      _addOnsTotal = computedAddOnsTotal;
+    });
+  }
+
+  Future<void> _fetchSessionBillData({bool refresh = false}) async {
+    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 1;
+    final Uri requestUri = Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill');
 
     setState(() {
       if (!refresh) _isLoading = true;
@@ -146,13 +160,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
 
     try {
       final response = await http
-          .get(
-        Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
-        headers: {
-          'Authorization': 'Bearer $sessionToken',
-          'Content-Type': 'application/json',
-        },
-      )
+          .get(requestUri, headers: {'Content-Type': 'application/json'})
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
@@ -162,10 +170,6 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         if (data != null && mounted) {
           final List rawOrders = data['orders'] ?? [];
           final List rawSessionItems = data['items'] ?? [];
-
-          double computedGrandTotal = 0.0;
-          double computedFoodTotal = 0.0;
-          double computedAddOnsTotal = 0.0;
 
           List<Map<String, dynamic>> parsedOrders = [];
 
@@ -201,8 +205,6 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                   lineItemTotal = lineFoodTotal + lineAddOnsTotal;
                 }
                 orderSum += lineItemTotal;
-                computedFoodTotal += lineFoodTotal;
-                computedAddOnsTotal += lineAddOnsTotal;
 
                 parsedItems.add({
                   "name": i['name'] ?? 'Item',
@@ -223,8 +225,6 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                 ? recordedOrderTotal
                 : orderSum;
 
-            computedGrandTotal += finalOrderTotal;
-
             String rawOrderCode =
             (o['client_order_id'] ?? o['id'] ?? o['order_id'] ?? 'ORD')
                 .toString();
@@ -243,23 +243,12 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                   : "01:53",
               "items": parsedItems,
               "order_total": finalOrderTotal,
+              "isSelected": true, // Naka-select by default ang bawat ticket
             });
-          }
-
-          double rootTotal = _parseDouble(
-            data['total_amount'] ?? data['grand_total'],
-          );
-          if (computedGrandTotal == 0.0 && rootTotal > 0) {
-            computedGrandTotal = rootTotal;
           }
 
           setState(() {
             _sessionOrders = parsedOrders;
-            _grandTotal = computedGrandTotal;
-            _foodDrinksTotal = computedFoodTotal > 0
-                ? computedFoodTotal
-                : computedGrandTotal;
-            _addOnsTotal = computedAddOnsTotal;
             _sessionStatus = (data['session_status'] ?? 'ACTIVE')
                 .toString()
                 .toUpperCase();
@@ -268,6 +257,9 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                 : parsedOrders.first['status'].toString().toUpperCase();
             _isLoading = false;
           });
+
+          // Kalkulahin ang kabuuang halaga batay sa mga napiling tickets
+          _recalculateTotals();
           return;
         }
       }
@@ -288,18 +280,12 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
 
   Future<void> _submitRequestBill() async {
     setState(() => _isRequestingBill = true);
-    final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-    final String? sessionToken = UserSession.customerSessionToken;
-    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 11;
+    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
 
     try {
-      // Tawagin ang tamang backend bill endpoint
       await http.get(
-        Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
-        headers: {
-          'Authorization': 'Bearer $sessionToken',
-          'Content-Type': 'application/json',
-        },
+        Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill'),
+        headers: {'Content-Type': 'application/json'},
       );
     } catch (_) {}
 
@@ -322,12 +308,16 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
       );
     }
   }
+
   @override
   Widget build(BuildContext context) {
-    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 11;
+    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
     final String tableString = widget.isTakeout
         ? 'Takeout'
         : 'Table ${tableNum.toString().padLeft(2, '0')}';
+
+    // Sinisigurong may naiwang selected o may laman para ma-enable ang button
+    final bool hasSelectedOrders = _sessionOrders.any((o) => o['isSelected'] == true);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F4EC),
@@ -339,48 +329,48 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             Expanded(
               child: _isLoading
                   ? const Center(
-                      child: CircularProgressIndicator(
-                        color: Color(0xFF203F35),
-                      ),
-                    )
+                child: CircularProgressIndicator(
+                  color: Color(0xFF203F35),
+                ),
+              )
                   : _errorMessage != null
                   ? _buildErrorView()
                   : SingleChildScrollView(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24.0,
-                        vertical: 16.0,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24.0,
+                  vertical: 16.0,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildIntroductionHeader(),
+                    const SizedBox(height: 12),
+                    _buildSessionStatusBadge(),
+                    const SizedBox(height: 20),
+                    if (_sessionOrders.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 40),
+                        child: Center(
+                          child: Text(
+                            "No active orders found in session.",
+                            style: TextStyle(color: Color(0xFF788078)),
+                          ),
+                        ),
+                      )
+                    else
+                      ..._sessionOrders.asMap().entries.map(
+                            (entry) => _buildBilledOrderCard(entry.value, entry.key),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildIntroductionHeader(),
-                          const SizedBox(height: 12),
-                          _buildSessionStatusBadge(),
-                          const SizedBox(height: 20),
-                          if (_sessionOrders.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 40),
-                              child: Center(
-                                child: Text(
-                                  "No active orders found in session.",
-                                  style: TextStyle(color: Color(0xFF788078)),
-                                ),
-                              ),
-                            )
-                          else
-                            ..._sessionOrders.map(
-                              (order) => _buildBilledOrderCard(order),
-                            ),
-                          const SizedBox(height: 12),
-                          _buildPriceBreakdownCard(),
-                          const SizedBox(height: 16),
-                          _buildWalletContextNote(),
-                          const SizedBox(height: 24),
-                          _buildPrimaryActionButton(),
-                          const SizedBox(height: 16),
-                        ],
-                      ),
-                    ),
+                    const SizedBox(height: 12),
+                    _buildPriceBreakdownCard(),
+                    const SizedBox(height: 16),
+                    _buildWalletContextNote(),
+                    const SizedBox(height: 24),
+                    _buildPrimaryActionButton(hasSelectedOrders),
+                    const SizedBox(height: 16),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
@@ -542,7 +532,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         ),
         SizedBox(height: 8),
         Text(
-          'Review your complete table session bill and place your payment request below.',
+          'Piliin ang mga ticket o order na gustong hingian ng bill at bayaran nang hiwalay.',
           style: TextStyle(fontSize: 13, color: Color(0xFF788078), height: 1.4),
         ),
       ],
@@ -557,8 +547,8 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         : isClosed
         ? 'Session Closed'
         : _billRequestedSubmitted
-        ? 'Bill Requested • $_orderStatus'
-        : 'Active Session • $_orderStatus';
+        ? 'Bill Requested'
+        : 'Active Session';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -595,22 +585,24 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     );
   }
 
-  Widget _buildBilledOrderCard(Map<String, dynamic> order) {
+  // Bawat order card ay pwedeng i-check o i-uncheck ng customer para sa hiwalay na pagbabayad
+  Widget _buildBilledOrderCard(Map<String, dynamic> order, int index) {
     final String code = order['order_code'] ?? '#ORD';
-    final String status = (order['status'] ?? 'PENDING')
-        .toString()
-        .toUpperCase();
+    final String status = (order['status'] ?? 'PENDING').toString().toUpperCase();
     final bool isPending = status == 'PENDING';
     final String time = order['time'] ?? '01:53';
     final List items = order['items'] ?? [];
+    final bool isSelected = order['isSelected'] ?? true;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: const Color(0xFFFFFDFA),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE5DFD3)),
+        border: Border.all(
+          color: isSelected ? const Color(0xFFA47C3D) : const Color(0xFFE5DFD3),
+          width: isSelected ? 1.5 : 1,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.02),
@@ -619,131 +611,143 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                code,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF203F35),
+      child: CheckboxListTile(
+        value: isSelected,
+        activeColor: const Color(0xFF203F35),
+        checkboxShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        onChanged: (bool? value) {
+          setState(() {
+            _sessionOrders[index]['isSelected'] = value ?? true;
+          });
+          _recalculateTotals();
+        },
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  code,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF203F35),
+                  ),
                 ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: isPending
-                      ? const Color(0xFFEEE7D9)
-                      : const Color(0xFFEAF0E9),
-                  borderRadius: BorderRadius.circular(100),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      isPending ? Icons.access_time : Icons.check,
-                      size: 12,
-                      color: isPending
-                          ? const Color(0xFFA47C3D)
-                          : const Color(0xFF203F35),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      status,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isPending
+                        ? const Color(0xFFEEE7D9)
+                        : const Color(0xFFEAF0E9),
+                    borderRadius: BorderRadius.circular(100),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isPending ? Icons.access_time : Icons.check,
+                        size: 12,
                         color: isPending
                             ? const Color(0xFFA47C3D)
                             : const Color(0xFF203F35),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            time,
-            style: const TextStyle(fontSize: 11, color: Color(0xFF788078)),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12.0),
-            child: Divider(height: 1, color: Color(0xFFE5DFD3)),
-          ),
-          ...items.map((item) {
-            final int quantity =
-                int.tryParse(item['quantity']?.toString() ?? '') ?? 1;
-            final double unitPrice = _parseDouble(
-              item['unit_price'] ?? item['price'],
-            );
-            final double addonTotal = _parseDouble(item['addon_total']);
-            final double lineTotal = _parseDouble(item['line_total']) > 0
-                ? _parseDouble(item['line_total'])
-                : (unitPrice + addonTotal) * quantity;
-            final List addons = item['addons'] is List
-                ? item['addons'] as List
-                : const [];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 12.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '${item['name'] ?? 'Item'} (x$quantity)',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF24382F),
-                          ),
-                        ),
-                      ),
+                      const SizedBox(width: 4),
                       Text(
-                        '₱${lineTotal.toStringAsFixed(2)}',
-                        style: const TextStyle(
-                          fontSize: 13,
+                        status,
+                        style: TextStyle(
+                          fontSize: 10,
                           fontWeight: FontWeight.bold,
-                          color: Color(0xFF203F35),
+                          color: isPending
+                              ? const Color(0xFFA47C3D)
+                              : const Color(0xFF203F35),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '₱${unitPrice.toStringAsFixed(2)} each',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF788078),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              time,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF788078)),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12.0),
+              child: Divider(height: 1, color: Color(0xFFE5DFD3)),
+            ),
+            ...items.map((item) {
+              final int quantity =
+                  int.tryParse(item['quantity']?.toString() ?? '') ?? 1;
+              final double unitPrice = _parseDouble(
+                item['unit_price'] ?? item['price'],
+              );
+              final double addonTotal = _parseDouble(item['addon_total']);
+              final double lineTotal = _parseDouble(item['line_total']) > 0
+                  ? _parseDouble(item['line_total'])
+                  : (unitPrice + addonTotal) * quantity;
+              final List addons = item['addons'] is List
+                  ? item['addons'] as List
+                  : const [];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${item['name'] ?? 'Item'} (x$quantity)',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF24382F),
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '₱${lineTotal.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF203F35),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                  ...addons.map(
-                    (addon) => Padding(
-                      padding: const EdgeInsets.only(left: 8, top: 2),
-                      child: Text(
-                        '+ ${addon['name'] ?? 'Add-on'} · ₱${_parseDouble(addon['price']).toStringAsFixed(2)} each',
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: Color(0xFF53766C),
+                    const SizedBox(height: 2),
+                    Text(
+                      '₱${unitPrice.toStringAsFixed(2)} each',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF788078),
+                      ),
+                    ),
+                    ...addons.map(
+                          (addon) => Padding(
+                        padding: const EdgeInsets.only(left: 8, top: 2),
+                        child: Text(
+                          '+ ${addon['name'] ?? 'Add-on'} · ₱${_parseDouble(addon['price']).toStringAsFixed(2)} each',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF53766C),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-            );
-          }),
-        ],
+                  ],
+                ),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
@@ -769,7 +773,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'Food & drinks',
+                'Food & drinks (Selected)',
                 style: TextStyle(fontSize: 12, color: Color(0xFF788078)),
               ),
               Text(
@@ -808,7 +812,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'Total',
+                'Selected Total',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -854,8 +858,8 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
           Expanded(
             child: Text(
               _billRequestedSubmitted
-                  ? 'Your bill request was sent! A waiter is bringing your official receipt and collecting payment.'
-                  : 'Requesting bill notifies the cashier to prepare your official receipt or staff to collect payment.',
+                  ? 'Your bill request was sent for the selected tickets! A waiter is bringing your receipt.'
+                  : 'Piliin ang mga ticket sa itaas para sa hiwalay na paghingi ng bill o pagbayad.',
               style: const TextStyle(
                 fontSize: 12,
                 color: Color(0xFF53766C),
@@ -868,61 +872,62 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     );
   }
 
-  Widget _buildPrimaryActionButton() {
+  Widget _buildPrimaryActionButton(bool hasSelectedOrders) {
     return SizedBox(
       width: double.infinity,
       height: 52,
       child: ElevatedButton(
         style: ElevatedButton.styleFrom(
-          backgroundColor:
+          backgroundColor: (!hasSelectedOrders ||
+              _isRequestingBill ||
               _billRequestedSubmitted ||
-                  _sessionStatus == 'CLOSED' ||
-                  _orderStatus == 'COMPLETED'
-              ? const Color(0xFF53766C)
+              _sessionStatus == 'CLOSED' ||
+              _orderStatus == 'COMPLETED')
+              ? const Color(0xFF788078)
               : const Color(0xFF203F35),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10),
           ),
           elevation: 0,
         ),
-        onPressed:
-            (_isRequestingBill ||
-                _billRequestedSubmitted ||
-                _sessionStatus == 'CLOSED' ||
-                _orderStatus == 'COMPLETED')
+        onPressed: (!hasSelectedOrders ||
+            _isRequestingBill ||
+            _billRequestedSubmitted ||
+            _sessionStatus == 'CLOSED' ||
+            _orderStatus == 'COMPLETED')
             ? null
             : _submitRequestBill,
         child: _isRequestingBill
             ? const CircularProgressIndicator(color: Colors.white)
             : Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    _orderStatus == 'COMPLETED'
-                        ? 'Paid ✓'
-                        : _sessionStatus == 'CLOSED'
-                        ? 'Session Closed'
-                        : _billRequestedSubmitted
-                        ? 'Bill Requested ✓'
-                        : 'Request Bill',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    _billRequestedSubmitted ||
-                            _sessionStatus == 'CLOSED' ||
-                            _orderStatus == 'COMPLETED'
-                        ? Icons.check_circle
-                        : Icons.receipt_long,
-                    color: Colors.white,
-                    size: 18,
-                  ),
-                ],
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              _orderStatus == 'COMPLETED'
+                  ? 'Paid ✓'
+                  : _sessionStatus == 'CLOSED'
+                  ? 'Session Closed'
+                  : _billRequestedSubmitted
+                  ? 'Bill Requested ✓'
+                  : 'Request Bill for Selected',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
               ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              _billRequestedSubmitted ||
+                  _sessionStatus == 'CLOSED' ||
+                  _orderStatus == 'COMPLETED'
+                  ? Icons.check_circle
+                  : Icons.receipt_long,
+              color: Colors.white,
+              size: 18,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -976,11 +981,11 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   }
 
   Widget _buildNavItem(
-    IconData icon,
-    String label, {
-    bool isActive = false,
-    required VoidCallback onTap,
-  }) {
+      IconData icon,
+      String label, {
+        bool isActive = false,
+        required VoidCallback onTap,
+      }) {
     return InkWell(
       onTap: onTap,
       child: Column(

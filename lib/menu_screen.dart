@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:ui';
 import 'dart:convert';
 import 'dart:async';
 import 'checkout_screen.dart';
-import 'kitchen_screen.dart';
-import 'waiter_screen.dart';
 import 'assistance_screen.dart';
 import 'orders_screen.dart';
 import 'order_status_screen.dart';
@@ -16,6 +15,7 @@ import 'order_type_selection_screen.dart';
 import 'session_bill_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'user_session.dart';
+import 'config/api_config.dart';
 
 class FoodItem {
   final int itemDbId;
@@ -23,6 +23,57 @@ class FoodItem {
   final double price;
   final int categoryId;
   final bool isAvailable;
+  final String? imageUrl;
+
+  static final Map<int, String> hardcodedImageUrls = {
+    1: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c', // Bihon
+    2: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841', // Mike Bihon
+    3: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38', // Pansit Canton
+    4: 'https://images.unsplash.com/photo-1552611052-33e04de081de', // Pansit Bihon Guisado
+    5: 'https://images.unsplash.com/photo-1621996346565-e3d5d6281222', // Filipino Style Spaghetti
+    6: 'https://images.unsplash.com/photo-1633964913295-ceb43826e7c9', // Creamy Carbonara
+    7: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6', // Baked Macaroni
+    8: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af',
+    9: 'https://images.unsplash.com/photo-1550547660-d9450f859349',
+    10: 'https://images.unsplash.com/photo-1539252554453-80ab65ce3586',
+    11: 'https://images.unsplash.com/photo-1567620832903-9fc6debc209f',
+    12: 'https://images.unsplash.com/photo-1608039829572-78524f79c4c7',
+    13: 'https://images.unsplash.com/photo-1527477396000-e27163b481c2',
+    14: 'https://images.unsplash.com/photo-1540420773420-3366772f4999',
+    15: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd',
+    16: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c',
+    17: 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1',
+    18: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6',
+    19: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c',
+    20: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46',
+    21: 'https://images.unsplash.com/photo-1544025162-d76694265947',
+    22: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c',
+    23: 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877',
+    24: 'https://images.unsplash.com/photo-1513456852971-30c0b8199d4d',
+    25: 'https://images.unsplash.com/photo-1534422298391-e4f8c172dddb',
+    26: 'https://images.unsplash.com/photo-1555126634-323283e090fa',
+    27: 'https://images.unsplash.com/photo-1544025162-d76694265947',
+    28: 'https://images.unsplash.com/photo-1567620832903-9fc6debc209f',
+    29: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2',
+    30: 'https://images.unsplash.com/photo-1513104890138-7c749659a591',
+    31: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38',
+    32: 'https://images.unsplash.com/photo-1534308983496-4fabb1a015ee',
+    33: 'https://images.unsplash.com/photo-1548839140-29a749e1cf4d',
+    34: 'https://images.unsplash.com/photo-1556679343-c7306c1976bc',
+    35: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd',
+    36: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97',
+    37: 'https://images.unsplash.com/photo-1625772299848-391b6a87d7b3',
+    38: 'https://images.unsplash.com/photo-1516684732162-798a0062be99',
+    39: 'https://images.unsplash.com/photo-1512058564366-18510be2db19',
+    40: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6',
+    41: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb',
+    42: 'https://images.unsplash.com/photo-1509440159596-0249088772ff',
+    43: 'https://images.unsplash.com/photo-1488477181946-6428a0291777',
+    44: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c',
+    45: 'https://images.unsplash.com/photo-1590301157890-4810ed352733',
+    46: 'https://images.unsplash.com/photo-1541658016709-82535e94bc69',
+    47: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c',
+  };
 
   FoodItem({
     required this.itemDbId,
@@ -30,15 +81,39 @@ class FoodItem {
     required this.price,
     required this.categoryId,
     this.isAvailable = true,
-  });
+    String? imageUrl,
+  }) : imageUrl = imageUrl ?? hardcodedImageUrls[itemDbId] ?? 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624';
 
   factory FoodItem.fromJson(Map<String, dynamic> json) {
+    final int id = json['id'] ?? 0;
+    final String nameStr = (json['name'] ?? '').toString().toLowerCase();
+
+    // Sinisiguro natin na ang bawat ulam ay may tiyak na tamang Unsplash link base sa pangalan at ID nito
+    String safeImg = hardcodedImageUrls[id] ?? 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624';
+
+    if (nameStr.contains('mike bihon')) {
+      safeImg = 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841';
+    } else if (nameStr.contains('bihon guisado') || nameStr.contains('pansit bihon guisado')) {
+      safeImg = 'https://images.unsplash.com/photo-1552611052-33e04de081de';
+    } else if (nameStr.contains('bihon')) {
+      safeImg = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c';
+    } else if (nameStr.contains('canton')) {
+      safeImg = 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38';
+    } else if (nameStr.contains('spaghetti')) {
+      safeImg = 'https://images.unsplash.com/photo-1621996346565-e3d5d6281222';
+    } else if (nameStr.contains('carbonara')) {
+      safeImg = 'https://images.unsplash.com/photo-1633964913295-ceb43826e7c9';
+    } else if (nameStr.contains('baked mac')) {
+      safeImg = 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6';
+    }
+
     return FoodItem(
-      itemDbId: json['id'] ?? 0,
+      itemDbId: id,
       name: json['name'] ?? 'Delicious Dish',
       price: double.tryParse(json['price']?.toString() ?? '0.0') ?? 0.0,
       categoryId: json['category_id'] ?? 1,
       isAvailable: json['is_available'] ?? true,
+      imageUrl: safeImg,
     );
   }
 }
@@ -80,6 +155,8 @@ class _MenuScreenState extends State<MenuScreen> {
   bool _isLoading = true;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+
+  String get _baseUrl => ApiConfig.baseUrl;
 
   int? _chosenTableNumber;
   bool _isTakeoutSelected = false;
@@ -124,6 +201,8 @@ class _MenuScreenState extends State<MenuScreen> {
 
   List<MenuCategory> _categoriesList = [];
   Timer? _heartbeatTimer;
+  late io.Socket _menuSocket;
+  bool _dialogShown = false;
 
   @override
   void initState() {
@@ -140,16 +219,209 @@ class _MenuScreenState extends State<MenuScreen> {
       _chosenTableNumber = UserSession.activeTableId;
     }
 
-    // MAHIGPIT NA KONTROL PARA SA NEW ORDER VS ADDITIONAL ORDER
     UserSession.isAdditionalOrder = widget.isAdditionalOrder;
     if (!widget.isAdditionalOrder) {
       UserSession.targetParentOrderId = null;
       UserSession.lastPlacedOrderId = null;
     }
 
+    _fetchDatabaseCategories();
     _fetchLiveDatabaseMenu();
     _syncExistingOrdersForTable();
     _startHeartbeatTimer();
+    _connectMenuSocket();
+  }
+
+  void _connectMenuSocket() {
+    try {
+      _menuSocket = io.io(
+        _baseUrl,
+        io.OptionBuilder()
+            .setTransports(['websocket'])
+            .disableAutoConnect()
+            .build(),
+      );
+
+      _menuSocket.onConnect((_) {
+        final int? tableId = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber;
+        if (tableId != null) {
+          _menuSocket.emit('join_room', 'table_$tableId');
+        }
+        final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+        if (sessionId != null) {
+          _menuSocket.emit('join_room', 'session_$sessionId');
+        }
+      });
+
+      _menuSocket.on('order_paid', _handleTableOrderFinished);
+      _menuSocket.on('table_session_closed', _handleTableOrderFinished);
+      _menuSocket.on('session_cancelled', _handleTableOrderFinished);
+      _menuSocket.on('order_status_updated', _handleTableOrderEvent);
+      _menuSocket.on('order_updated', _handleTableOrderEvent);
+      _menuSocket.connect();
+    } catch (_) {}
+  }
+
+  void _handleTableOrderEvent(dynamic data) {
+    if (!mounted) return;
+    if (data == null) return;
+
+    final Map<String, dynamic> payload = data is Map<String, dynamic> ? data : Map<String, dynamic>.from(data as Map);
+    final Map<String, dynamic> orderPayload = payload['order'] is Map ? Map<String, dynamic>.from(payload['order']) : payload;
+
+    final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+    final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? payload['table_id']?.toString() ?? '');
+
+    if (eventTableId != null && eventTableId != currentTable) {
+      return;
+    }
+
+    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
+    final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
+    final dynamic currentOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
+
+    if (eventOrderId != null && currentOrderId != null) {
+      final String targetStr = currentOrderId.toString().replaceAll('#BS-', '').trim();
+      final String eventStr = eventOrderId.toString().replaceAll('#BS-', '').trim();
+      final int? targetInt = int.tryParse(targetStr);
+      final int? eventInt = int.tryParse(eventStr);
+      bool isSame = (targetStr == eventStr) || (targetInt != null && eventInt != null && targetInt == eventInt);
+      if (!isSame) {
+        return;
+      }
+    }
+
+    if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
+      _handleTableOrderFinished(payload);
+    } else if (status == 'DECLINED' || status == 'REJECTED') {
+      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
+      _showMenuOrderDeclinedDialog(reason, orderPayload['order_code'] ?? '#BS-${eventOrderId ?? ""}');
+    }
+  }
+
+  bool _menuDeclinedDialogShown = false;
+
+  void _showMenuOrderDeclinedDialog(String declineReason, String orderCode) {
+    if (_menuDeclinedDialogShown || !mounted) return;
+    _menuDeclinedDialogShown = true;
+
+    final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Order Declined', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444))),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Pasensya na po, ang inyong order ($orderCode) ay na-decline ng kitchen/admin.',
+              style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEE2E2),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFCA5A5)),
+              ),
+              child: Text(
+                'Reason: $declineReason',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B3B2B)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              UserSession.clearSession();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => OrderTypeSelectionScreen(
+                    tableId: currentTable,
+                    tableNumber: currentTable,
+                  ),
+                ),
+                (route) => false,
+              );
+            },
+            child: const Text('Acknowledge / Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleTableOrderFinished(dynamic data) {
+    if (!mounted) return;
+
+    final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+    int? eventTableId;
+    dynamic eventOrderId;
+    if (data is Map) {
+      eventTableId = int.tryParse(data['table_id']?.toString() ?? data['table_number']?.toString() ?? '');
+      eventOrderId = data['order_id'] ?? data['id'];
+    }
+
+    if (eventTableId != null && eventTableId != currentTable) {
+      return; // Balewalain kapag para sa ibang mesa
+    }
+
+    final dynamic currentOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
+    final String orderCode = data is Map ? (data['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}').trim() : 'Ticket';
+
+    // --- FIX CROSS-TABLE / CROSS-TICKET LEAK ---
+    if (eventOrderId != null && currentOrderId != null) {
+      final String targetStr = currentOrderId.toString().replaceAll('#BS-', '').trim();
+      final String eventStr = eventOrderId.toString().replaceAll('#BS-', '').trim();
+      if (targetStr != eventStr) {
+        return; // Kung magkaiba ang order ticket, huwag i-interrupt ang user at huwag mag-redirect!
+      }
+    }
+
+    if (_dialogShown) return;
+    _dialogShown = true;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Order Finished', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        content: Text('Order $orderCode is done and has been settled.'),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              UserSession.clearSession();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => OrderTypeSelectionScreen(
+                    tableId: currentTable,
+                    tableNumber: currentTable,
+                  ),
+                ),
+                    (route) => false,
+              );
+            },
+            child: const Text('Back to Selection', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _startHeartbeatTimer() {
@@ -177,6 +449,10 @@ class _MenuScreenState extends State<MenuScreen> {
   void dispose() {
     _heartbeatTimer?.cancel();
     _searchController.dispose();
+    try {
+      _menuSocket.disconnect();
+      _menuSocket.dispose();
+    } catch (_) {}
     super.dispose();
   }
 
@@ -187,6 +463,42 @@ class _MenuScreenState extends State<MenuScreen> {
       headers["Authorization"] = "Bearer $token";
     }
     return headers;
+  }
+
+  Future<void> _fetchDatabaseCategories() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost:5000/api/v1/categories'),
+        headers: _authHeaders,
+      );
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> decodedData = jsonDecode(response.body);
+        final List catList = decodedData['data'] ?? [];
+        final fetchedCategories = catList
+            .map((cat) => MenuCategory.fromJson(cat))
+            .toList();
+
+        fetchedCategories.insert(0, MenuCategory(id: 0, name: "All Orders"));
+
+        if (mounted) {
+          setState(() {
+            _categoriesList = fetchedCategories;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _categoriesList = _categoriesFallback;
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _categoriesList = _categoriesFallback;
+        });
+      }
+    }
   }
 
   Future<void> _syncExistingOrdersForTable() async {
@@ -214,7 +526,7 @@ class _MenuScreenState extends State<MenuScreen> {
       }
     } catch (_) {}
 
-    if (mounted) {
+    if (_categoriesList.isEmpty && mounted) {
       setState(() {
         _categoriesList = _categoriesFallback;
       });
@@ -224,21 +536,22 @@ class _MenuScreenState extends State<MenuScreen> {
   Future<void> _fetchLiveDatabaseMenu() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/v1/menu'),
-        headers: _authHeaders,
+        Uri.parse('$_baseUrl/api/v1/customer/menu'),
       );
       if (response.statusCode == 200) {
         final Map<String, dynamic> decodedData = jsonDecode(response.body);
         final List menuList = decodedData['data'] ?? [];
-        setState(() {
-          _menuRepository = menuList
-              .map((item) => FoodItem.fromJson(item))
-              .toList();
-          _isLoading = false;
-        });
-      } else {
-        _loadFallbackSamples();
+        if (mounted && menuList.isNotEmpty) {
+          setState(() {
+            _menuRepository = menuList
+                .map((item) => FoodItem.fromJson(item))
+                .toList();
+            _isLoading = false;
+          });
+          return;
+        }
       }
+      _loadFallbackSamples();
     } catch (e) {
       _loadFallbackSamples();
     }
@@ -332,10 +645,11 @@ class _MenuScreenState extends State<MenuScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: OutlinedButton.icon(
-                          icon: const Icon(Icons.restaurant, color: Color(0xFF203F35)),
+                          icon: const Icon(Icons.restaurant, color: Color(
+                              0xFF4A0707)),
                           label: const Text('Order Type'),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF203F35),
+                            foregroundColor: const Color(0xFF4A0707),
                             backgroundColor: const Color(0xFFFFFDFA),
                             side: const BorderSide(color: Color(0xFFE5DFD3)),
                             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -672,16 +986,6 @@ class _MenuScreenState extends State<MenuScreen> {
                 onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => OrdersScreen(cartItems: []))),
               ),
               IconButton(
-                icon: const Icon(Icons.person_pin_outlined, color: Color(0xFF203F35), size: 22),
-                tooltip: 'Waiter Control',
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const WaiterScreen())),
-              ),
-              IconButton(
-                icon: const Icon(Icons.soup_kitchen_outlined, color: Color(0xFF203F35), size: 22),
-                tooltip: 'Kitchen Display',
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const KitchenScreen())),
-              ),
-              IconButton(
                 icon: const Icon(Icons.admin_panel_settings_outlined, color: Color(0xFF203F35), size: 22),
                 tooltip: 'Admin Dashboard',
                 onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminDashboardScreen())),
@@ -939,22 +1243,43 @@ class _MenuScreenState extends State<MenuScreen> {
                     color: Color(0xFFEEE7D9),
                     borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
                   ),
-                  child: Stack(
-                    children: [
-                      Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(_getCategoryIcon(foodItem.categoryId), size: 36, color: const Color(0xFF203F35)),
-                            const SizedBox(height: 4),
-                            Text(
-                              foodItem.name.isNotEmpty ? foodItem.name.substring(0, 1) : 'D',
-                              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFFA47C3D)),
-                            ),
-                          ],
-                        ),
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                    child: foodItem.imageUrl != null && foodItem.imageUrl!.isNotEmpty
+                        ? Image.network(
+                      foodItem.imageUrl!,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: 118,
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return const Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF203F35)),
+                          ),
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) {
+                        return Center(
+                          child: Icon(_getCategoryIcon(foodItem.categoryId), size: 36, color: const Color(0xFF203F35)),
+                        );
+                      },
+                    )
+                        : Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(_getCategoryIcon(foodItem.categoryId), size: 36, color: const Color(0xFF203F35)),
+                          const SizedBox(height: 4),
+                          Text(
+                            foodItem.name.isNotEmpty ? foodItem.name.substring(0, 1) : 'D',
+                            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFFA47C3D)),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
                 Expanded(
@@ -1091,7 +1416,9 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   String _getCategoryName(int catId) {
-    final match = _categoriesFallback.firstWhere((c) => c.id == catId, orElse: () => MenuCategory(id: catId, name: 'Specialty'));
+    final match = _categoriesList.isNotEmpty
+        ? _categoriesList.firstWhere((c) => c.id == catId, orElse: () => MenuCategory(id: catId, name: 'Specialty'))
+        : _categoriesFallback.firstWhere((c) => c.id == catId, orElse: () => MenuCategory(id: catId, name: 'Specialty'));
     return match.name;
   }
 

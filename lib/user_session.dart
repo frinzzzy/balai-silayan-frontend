@@ -44,6 +44,16 @@ class UserSession {
   static String? get activeSessionToken =>
       customerSessionToken ?? authToken ?? qrToken;
 
+  // Sentralisadong HTTP Authorization Headers
+  static Map<String, String> get authHeaders {
+    final token = activeSessionToken;
+    final Map<String, String> headers = {"Content-Type": "application/json"};
+    if (token != null && token.isNotEmpty) {
+      headers["Authorization"] = "Bearer $token";
+    }
+    return headers;
+  }
+
   // Pinatibay na setSession para masigurong nasasalo kahit anong format ng ID o token
   static void setSession({
     int? tableId,

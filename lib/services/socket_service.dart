@@ -1,18 +1,13 @@
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../models/user_session.dart';
+import '../config/api_config.dart';
 
 class SocketService {
   late io.Socket _socket;
   bool _isConnected = false;
 
-  String get _baseUrl {
-    if (kIsWeb) return 'http://localhost:5000';
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:5000';
-    }
-    return 'http://localhost:5000';
-  }
+  String get _baseUrl => ApiConfig.baseUrl;
 
   void connect({
     Function(dynamic)? onOrderUpdated,
@@ -20,37 +15,53 @@ class SocketService {
     Function(dynamic)? onSessionClosed,
   }) {
     try {
+      // 1. Transport Configuration na may websocket at polling fallback para maiwasan ang ERR_CONNECTION_REFUSED
+      // 2. Reconnection logic na may auto-reconnect at delay
       _socket = io.io(
         _baseUrl,
         io.OptionBuilder()
-            .setTransports(['websocket'])
-            .disableAutoConnect()
+            .setTransports(['websocket', 'polling'])
+            .enableAutoConnect()
+            .setReconnectionAttempts(99999)
+            .setReconnectionDelay(1000)
+            .setReconnectionDelayMax(5000)
             .build(),
       );
 
+      // 3. Error Handling & Comprehensive Logging Debug Listeners
       _socket.onConnect((_) {
         _isConnected = true;
-        debugPrint('SocketService connected successfully.');
+        debugPrint('⚡ [SocketService] Connected successfully to $_baseUrl (ID: ${_socket.id})');
 
-        // Auto join table room & session room if active
-        if (UserSession.activeTableId != null) {
-          joinTableRoom(UserSession.activeTableId!);
-        }
-        final int? sessionId = UserSession.activeSessionId ??
-            int.tryParse(UserSession.sessionId ?? '');
-        if (sessionId != null) {
-          joinSessionRoom(sessionId);
-        }
-        if (UserSession.targetParentOrderId != null) {
-          joinOrderRoom(UserSession.targetParentOrderId);
-        }
+        // Muling isagawa ang pag-join sa mga rooms sakaling nagkonekta o nag-reconnect
+        _rejoinRooms();
       });
 
-      _socket.onDisconnect((_) {
+      _socket.onConnectError((err) {
         _isConnected = false;
-        debugPrint('SocketService disconnected.');
+        debugPrint('❌ [SocketService] Connection Error to $_baseUrl: $err');
       });
 
+      _socket.onError((err) {
+        debugPrint('⚠️ [SocketService] Socket Error: $err');
+      });
+
+      _socket.onReconnect((attempt) {
+        _isConnected = true;
+        debugPrint('🔄 [SocketService] Reconnected successfully on attempt #$attempt');
+        _rejoinRooms();
+      });
+
+      _socket.onReconnectAttempt((attempt) {
+        debugPrint('⏳ [SocketService] Reconnection attempt #$attempt...');
+      });
+
+      _socket.onDisconnect((reason) {
+        _isConnected = false;
+        debugPrint('🔌 [SocketService] Disconnected from server. Reason: $reason');
+      });
+
+      // Event listeners para sa real-time updates
       if (onOrderUpdated != null) {
         _socket.on('order_updated', (data) => onOrderUpdated(data));
         _socket.on('additional_items_added', (data) => onOrderUpdated(data));
@@ -71,14 +82,38 @@ class SocketService {
 
       _socket.connect();
     } catch (e) {
-      debugPrint('SocketService initialization error: $e');
+      debugPrint('❌ [SocketService] Initialization exception: $e');
     }
+  }
+
+  void _rejoinRooms() {
+    try {
+      final int? tableId = UserSession.activeTableId ?? UserSession.activeTableNumber;
+      if (tableId != null) {
+        joinTableRoom(tableId);
+      }
+      final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      if (sessionId != null) {
+        joinSessionRoom(sessionId);
+      }
+      if (UserSession.targetParentOrderId != null) {
+        joinOrderRoom(UserSession.targetParentOrderId);
+      }
+      if (UserSession.lastPlacedOrderId != null) {
+        joinOrderRoom(UserSession.lastPlacedOrderId);
+      }
+    } catch (_) {}
   }
 
   void joinRoom(String roomName) {
     if (_isConnected) {
       _socket.emit('join_room', roomName);
-      debugPrint('SocketService joined room: $roomName');
+      debugPrint('📂 [SocketService] Joined room: $roomName');
+    } else {
+      // Kung offline pa, i-queue o i-emit agad kapag nag-connect na
+      try {
+        _socket.emit('join_room', roomName);
+      } catch (_) {}
     }
   }
 
@@ -100,24 +135,24 @@ class SocketService {
   void leaveRoom(String roomName) {
     if (_isConnected) {
       _socket.emit('leave_room', roomName);
-      debugPrint('SocketService left room: $roomName');
+      debugPrint('📂 [SocketService] Left room: $roomName');
     }
   }
 
   void disconnect() {
     try {
-      if (UserSession.activeTableId != null) {
-        leaveRoom('table_${UserSession.activeTableId}');
+      final int? tableId = UserSession.activeTableId ?? UserSession.activeTableNumber;
+      if (tableId != null) {
+        leaveRoom('table_$tableId');
       }
-      final int? sessionId = UserSession.activeSessionId ??
-          int.tryParse(UserSession.sessionId ?? '');
+      final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
       if (sessionId != null) {
         leaveRoom('session_$sessionId');
       }
       _socket.disconnect();
       _socket.dispose();
       _isConnected = false;
-      debugPrint('SocketService fully disconnected and cleaned up.');
+      debugPrint('🔌 [SocketService] Fully disconnected and cleaned up.');
     } catch (_) {}
   }
 }

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:convert';
 import 'menu_screen.dart';
 import 'checkout_screen.dart';
 import 'assistance_screen.dart';
+import 'order_type_selection_screen.dart';
 import 'user_session.dart';
 
 class ShoppingCartScreen extends StatefulWidget {
@@ -33,6 +35,8 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   bool _isLoadingParentItems = false;
   List<dynamic> _sessionOrdersSummary = [];
   double _sessionGrandTotal = 0.0;
+  late io.Socket _cartSocket;
+  bool _dialogShown = false;
 
   String get _baseUrl {
     if (kIsWeb) return 'http://localhost:5000';
@@ -45,15 +49,214 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     super.initState();
     _editableCart = Map.from(widget.cart);
     _calculatedTotal = widget.total;
-    _fetchOrdersSummary();
+    if (widget.isAdditionalOrder || UserSession.isAdditionalOrder) {
+      _fetchOrdersSummary();
+    } else {
+      _sessionOrdersSummary = [];
+      _sessionGrandTotal = 0.0;
+    }
+    _connectCartSocket();
+  }
+
+  void _connectCartSocket() {
+    try {
+      _cartSocket = io.io(
+        _baseUrl,
+        io.OptionBuilder()
+            .setTransports(['websocket'])
+            .disableAutoConnect()
+            .build(),
+      );
+
+      _cartSocket.onConnect((_) {
+        final int? tableId = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber;
+        if (tableId != null) {
+          _cartSocket.emit('join_room', 'table_$tableId');
+        }
+        final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+        if (sessionId != null) {
+          _cartSocket.emit('join_room', 'session_$sessionId');
+        }
+      });
+
+      _cartSocket.on('order_paid', _handleTableOrderFinished);
+      _cartSocket.on('table_session_closed', _handleTableOrderFinished);
+      _cartSocket.on('session_cancelled', _handleTableOrderFinished);
+      _cartSocket.on('order_status_updated', _handleTableOrderEvent);
+      _cartSocket.on('order_updated', _handleTableOrderEvent);
+      _cartSocket.connect();
+    } catch (_) {}
+  }
+
+  void _handleTableOrderEvent(dynamic data) {
+    if (!mounted) return;
+    if (data == null) return;
+
+    final Map<String, dynamic> payload = data is Map<String, dynamic> ? data : Map<String, dynamic>.from(data as Map);
+    final Map<String, dynamic> orderPayload = payload['order'] is Map ? Map<String, dynamic>.from(payload['order']) : payload;
+
+    final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+    final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? payload['table_id']?.toString() ?? '');
+
+    if (eventTableId != null && eventTableId != currentTable) {
+      return;
+    }
+
+    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
+    final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
+    final dynamic currentOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
+
+    if (eventOrderId != null && currentOrderId != null) {
+      final String targetStr = currentOrderId.toString().replaceAll('#BS-', '').trim();
+      final String eventStr = eventOrderId.toString().replaceAll('#BS-', '').trim();
+      final int? targetInt = int.tryParse(targetStr);
+      final int? eventInt = int.tryParse(eventStr);
+      bool isSame = (targetStr == eventStr) || (targetInt != null && eventInt != null && targetInt == eventInt);
+      if (!isSame) {
+        return;
+      }
+    }
+
+    if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
+      _handleTableOrderFinished(payload);
+    } else if (status == 'DECLINED' || status == 'REJECTED') {
+      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
+      _showCartOrderDeclinedDialog(reason, orderPayload['order_code'] ?? '#BS-${eventOrderId ?? ""}');
+    }
+  }
+
+  bool _cartDeclinedDialogShown = false;
+
+  void _showCartOrderDeclinedDialog(String declineReason, String orderCode) {
+    if (_cartDeclinedDialogShown || !mounted) return;
+    _cartDeclinedDialogShown = true;
+
+    final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Order Declined', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444))),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Pasensya na po, ang inyong order ($orderCode) ay na-decline ng kitchen/admin.',
+              style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEE2E2),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFCA5A5)),
+              ),
+              child: Text(
+                'Reason: $declineReason',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B3B2B)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              UserSession.clearSession();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => OrderTypeSelectionScreen(
+                    tableId: currentTable,
+                    tableNumber: currentTable,
+                  ),
+                ),
+                (route) => false,
+              );
+            },
+            child: const Text('Acknowledge / Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleTableOrderFinished(dynamic data) {
+    if (!mounted) return;
+
+    final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+    int? eventTableId;
+    dynamic eventOrderId;
+    if (data is Map) {
+      eventTableId = int.tryParse(data['table_id']?.toString() ?? '');
+      eventOrderId = data['order_id'] ?? data['id'];
+    }
+
+    if (eventTableId != null && eventTableId != currentTable) {
+      return;
+    }
+
+    final dynamic currentOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
+    final String orderCode = data is Map ? (data['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}').trim() : 'Ticket';
+
+    if (eventOrderId != null && currentOrderId != null && eventOrderId.toString() != currentOrderId.toString()) {
+      return;
+    }
+
+    if (_dialogShown) return;
+    _dialogShown = true;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Order Finished', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        content: Text('Order $orderCode is done and has been settled.'),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              UserSession.clearSession();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => OrderTypeSelectionScreen(
+                    tableId: currentTable,
+                    tableNumber: currentTable,
+                  ),
+                ),
+                (route) => false,
+              );
+            },
+            child: const Text('Back to Selection', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    try {
+      _cartSocket.disconnect();
+      _cartSocket.dispose();
+    } catch (_) {}
+    super.dispose();
   }
 
   Future<void> _fetchOrdersSummary() async {
     final sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-
-    // Pinag-isang fallback para masiguro na hindi null ang token
     final sessionToken = UserSession.customerSessionToken ?? UserSession.authToken ?? UserSession.qrToken;
-
     if (sessionId == null) return;
 
     setState(() => _isLoadingParentItems = true);
@@ -64,7 +267,6 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
         headers["Authorization"] = "Bearer $sessionToken";
       }
 
-      // Siguraduhing tamang endpoint ang tinatawagan (/bill kung saan galing ang buong session summary)
       final response = await http.get(
         Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
         headers: headers,
@@ -74,10 +276,8 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
         final resData = jsonDecode(response.body);
         final data = resData['data'];
         if (data != null) {
-          final List orders = data['orders'] ?? data['items'] ?? [];
-          final double grandTotal = double.tryParse(
-            data['grand_total']?.toString() ?? data['total_amount']?.toString() ?? '0',
-          ) ?? 0.0;
+          final List orders = data['orders'] ?? data['orders_summary'] ?? [];
+          final double grandTotal = double.tryParse(data['grand_total']?.toString() ?? '0') ?? 0.0;
 
           setState(() {
             _sessionOrdersSummary = orders;
@@ -94,7 +294,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     setState(() {
       _calculatedTotal = _editableCart.entries.fold(
         0.0,
-            (sum, entry) => sum + (entry.key.price * entry.value), // Naayos ang '*' operator at tinanggal ang '-'
+        (sum, entry) => sum + (entry.key.price * entry.value),
       );
     });
   }
@@ -125,6 +325,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   Widget build(BuildContext context) {
     final int tableNum = widget.tableId ?? 7;
     final String tableString = widget.isTakeout ? 'Takeout' : 'Table ${tableNum.toString().padLeft(2, '0')}';
+    final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F4EC),
@@ -136,45 +337,46 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
             Expanded(
               child: _isLoadingParentItems
                   ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFF203F35)),
-              )
+                      child: CircularProgressIndicator(color: Color(0xFF203F35)),
+                    )
                   : SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildIntroductionHeader(),
-                    const SizedBox(height: 20),
-                    if (_sessionOrdersSummary.isNotEmpty) ...[
-                      const Text(
-                        'Active Table Tickets',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildIntroductionHeader(),
+                          const SizedBox(height: 20),
+                          if (isAdditional && _sessionOrdersSummary.isNotEmpty) ...[
+                            const Text(
+                              'Active Table Tickets',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                            ),
+                            const SizedBox(height: 12),
+                            ..._sessionOrdersSummary.asMap().entries.map((entry) {
+                              final index = entry.key;
+                              final order = entry.value;
+                              return _buildTicketGroupCard(index + 1, order);
+                            }),
+                            const SizedBox(height: 24),
+                          ],
+                          if (_editableCart.isEmpty && (!isAdditional || _sessionOrdersSummary.isEmpty))
+                            _buildEmptyCartView()
+                          else if (_editableCart.isNotEmpty) ...[
+                            if (isAdditional)
+                              const Text(
+                                'New Cart Items',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                              ),
+                            if (isAdditional) const SizedBox(height: 12),
+                            ..._editableCart.entries.map((entry) => _buildCartItemCard(entry.key, entry.value)),
+                            const SizedBox(height: 12),
+                            _buildPriceBreakdownCard(),
+                            const SizedBox(height: 24),
+                            _buildActionButtonsArea(),
+                          ],
+                        ],
                       ),
-                      const SizedBox(height: 12),
-                      ..._sessionOrdersSummary.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final order = entry.value;
-                        return _buildTicketGroupCard(index + 1, order);
-                      }),
-                      const SizedBox(height: 24),
-                    ],
-                    if (_editableCart.isEmpty && _sessionOrdersSummary.isEmpty)
-                      _buildEmptyCartView()
-                    else if (_editableCart.isNotEmpty) ...[
-                      const Text(
-                        'New Cart Items',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
-                      ),
-                      const SizedBox(height: 12),
-                      ..._editableCart.entries.map((entry) => _buildCartItemCard(entry.key, entry.value)),
-                      const SizedBox(height: 12),
-                      _buildPriceBreakdownCard(),
-                      const SizedBox(height: 24),
-                      _buildActionButtonsArea(),
-                    ],
-                  ],
-                ),
-              ),
+                    ),
             ),
           ],
         ),
@@ -311,7 +513,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildTableContextStrip(String tableString) {
-    final bool isAdditional = widget.isAdditionalOrder;
+    final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
     final String? parentId = UserSession.targetParentOrderId;
 
     return Container(
@@ -342,14 +544,14 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildIntroductionHeader() {
-    final bool isAdditional = widget.isAdditionalOrder;
+    final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
     final String orderTag = isAdditional ? 'ADDITIONAL ORDER' : 'NEW ORDER';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '$orderTag\n$_totalItemCount ITEMS', // Naayos ang string interpolation syntax
+          '$orderTag • $_totalItemCount ITEMS',
           style: const TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w700,
@@ -417,7 +619,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildCartItemCard(FoodItem item, int quantity) {
-    final double itemTotal = item.price * quantity; // Naayos ang '*' operator
+    final double itemTotal = item.price * quantity;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -453,7 +655,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                       const Icon(Icons.restaurant_outlined, size: 24, color: Color(0xFF203F35)),
                       const SizedBox(height: 2),
                       Text(
-                        item.name.isNotEmpty ? item.name.substring(0, 1) : 'D',
+                        item.name.substring(0, 1),
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFFA47C3D)),
                       ),
                     ],
@@ -546,7 +748,56 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildPriceBreakdownCard() {
-    final double combinedGrandTotal = _calculatedTotal + _sessionGrandTotal;
+    final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
+    final double combinedGrandTotal = isAdditional ? (_calculatedTotal + _sessionGrandTotal) : _calculatedTotal;
+
+    if (!isAdditional) {
+      return Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFDFA),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFE5DFD3)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.02),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('New Order Total', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
+                Text('₱${_calculatedTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+              ],
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12.0),
+              child: Divider(height: 1, color: Color(0xFFE5DFD3)),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Grand Total', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF24382F))),
+                Text(
+                  '₱${combinedGrandTotal.toStringAsFixed(0)}',
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Prices include applicable taxes. No added service charge.',
+              style: TextStyle(fontSize: 10, color: Color(0xFF788078)),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -604,7 +855,9 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   Widget _buildActionButtonsArea() {
-    final double combinedGrandTotal = _calculatedTotal + _sessionGrandTotal;
+    final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
+    _calculatedTotal;
+    final double combinedGrandTotal = isAdditional ? (_calculatedTotal + _sessionGrandTotal) : _calculatedTotal;
 
     return Column(
       children: [

@@ -72,10 +72,10 @@ class DailySalesStats {
 
   factory DailySalesStats.fromJson(Map<String, dynamic> json) {
     return DailySalesStats(
-      totalSales: double.tryParse(json['total_sales']?.toString() ?? '84240.0') ?? 84240.0,
-      totalTransactions: int.tryParse(json['total_transactions']?.toString() ?? '72') ?? 72,
-      cashSales: double.tryParse(json['cash_sales']?.toString() ?? '35100.0') ?? 35100.0,
-      gcashSales: double.tryParse(json['gcash_sales']?.toString() ?? '49140.0') ?? 49140.0,
+      totalSales: double.tryParse(json['gross_sales']?.toString() ?? json['total_sales']?.toString() ?? '0') ?? 0.0,
+      totalTransactions: int.tryParse(json['total_transactions']?.toString() ?? '0') ?? 0,
+      cashSales: double.tryParse(json['cash_sales']?.toString() ?? '0') ?? 0.0,
+      gcashSales: double.tryParse(json['gcash_sales']?.toString() ?? '0') ?? 0.0,
     );
   }
 }
