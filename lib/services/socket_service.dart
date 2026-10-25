@@ -9,6 +9,35 @@ class SocketService {
 
   String get _baseUrl => ApiConfig.baseUrl;
 
+  /// Normalizes an order/ticket ID (int o string, may may kasamang '#BS-' o 'BS-'
+  /// prefix) into isang canonical string upang hindi magulo ang integer vs string
+  /// ticket formats (hal. int 12, '12', '#BS-0012', at 'BS-12' ay lahat ay '12').
+  static String normalizeOrderId(dynamic orderId) {
+    if (orderId == null) return '';
+    final String stripped = orderId.toString().trim().replaceAll(RegExp(r'^#?BS-?', caseSensitive: false), '').trim();
+    final int? parsed = int.tryParse(stripped);
+    if (parsed != null) {
+      // I-normalize ang numerong ticket id para wasiwas ang leading zeros
+      // (hal. '0012' at '12' ay pareho na nang mangangahulugang '12').
+      return parsed.toString();
+    }
+    return stripped.toUpperCase();
+  }
+
+  /// Safe order/ticket comparison na umi-handle nang maayos ng integer at
+  /// string ticket formats sa harap ng isa't isa.
+  static bool isSameOrder(dynamic orderIdA, dynamic orderIdB) {
+    final String normalizedA = normalizeOrderId(orderIdA);
+    final String normalizedB = normalizeOrderId(orderIdB);
+    if (normalizedA.isEmpty || normalizedB.isEmpty) return false;
+    final int? intA = int.tryParse(normalizedA);
+    final int? intB = int.tryParse(normalizedB);
+    if (intA != null && intB != null) {
+      return intA == intB;
+    }
+    return normalizedA == normalizedB;
+  }
+
   void connect({
     Function(dynamic)? onOrderUpdated,
     Function(dynamic)? onStatusUpdated,

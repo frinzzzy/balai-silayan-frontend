@@ -6,6 +6,7 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:convert';
 
 import 'assistance_screen.dart';
+import 'config/api_config.dart';
 
 class OrdersScreen extends StatefulWidget {
   final List<Map<String, dynamic>> cartItems;
@@ -24,13 +25,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   final List<Map<String, dynamic>> _recentPaidOrders = [];
   late io.Socket _socket;
 
-  String get _baseUrl {
-    if (kIsWeb) return 'http://localhost:5000';
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:5000';
-    }
-    return 'http://localhost:5000';
-  }
+  String get _baseUrl => ApiConfig.baseUrl;
 
   @override
   void initState() {
@@ -43,7 +38,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     _socket = io.io(
       _baseUrl,
       io.OptionBuilder()
-          .setTransports(['websocket'])
+          .setTransports(['websocket', 'polling'])
           .disableAutoConnect()
           .build(),
     );

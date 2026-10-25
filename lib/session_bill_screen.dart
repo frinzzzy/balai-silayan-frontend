@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
@@ -10,6 +9,7 @@ import 'assistance_screen.dart';
 import 'order_status_screen.dart';
 import 'bill_requested_screen.dart';
 import 'user_session.dart';
+import 'config/api_config.dart';
 
 class SessionBillScreen extends StatefulWidget {
   final int? tableId;
@@ -35,13 +35,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   String _orderStatus = 'PENDING';
   String _sessionStatus = 'ACTIVE';
 
-  String get _baseUrl {
-    if (kIsWeb) return 'http://localhost:5000';
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:5000';
-    }
-    return 'http://localhost:5000';
-  }
+  String get _baseUrl => ApiConfig.baseUrl;
 
   @override
   void initState() {
@@ -54,7 +48,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     _socket = io.io(
       _baseUrl,
       io.OptionBuilder()
-          .setTransports(['websocket'])
+          .setTransports(['websocket', 'polling'])
           .disableAutoConnect()
           .build(),
     );

@@ -3,10 +3,10 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 import 'menu_screen.dart';
-import 'assistance_screen.dart';
 import 'qr_scanner_screen.dart';
 import 'user_session.dart';
-import 'order_status_screen.dart'; // I-import ang OrderStatusScreen para direktang matawag
+import 'order_status_screen.dart';
+import 'services/audio_notification_service.dart';
 
 class OrderTypeSelectionScreen extends StatefulWidget {
   final int tableNumber;
@@ -508,14 +508,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
           ],
         ),
         InkWell(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const AssistanceScreen(),
-              ),
-            );
-          },
+          onTap: () => AudioNotificationService.showNotificationHistory(context),
           borderRadius: BorderRadius.circular(22),
           child: Container(
             width: 44,

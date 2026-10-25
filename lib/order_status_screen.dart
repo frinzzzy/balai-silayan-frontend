@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
-import 'package:socket_io_client/socket_io_client.dart' as io;
 
-import 'assistance_screen.dart';
 import 'orders_screen.dart';
 import 'qr_scanner_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'user_session.dart';
+import 'services/audio_notification_service.dart';
+import 'services/socket_service.dart';
+import 'config/api_config.dart';
 
 class OrderStatusScreen extends StatefulWidget {
   final dynamic orderId;
@@ -34,7 +34,7 @@ class OrderStatusScreen extends StatefulWidget {
 }
 
 class _OrderStatusScreenState extends State<OrderStatusScreen> {
-  late io.Socket _repositorySocketGateway;
+  final SocketService _socketService = SocketService();
   Timer? _statusPollTimer;
   String _statusBadgeLabel = "Pending review";
   String _currentOrderStatus = 'PENDING';
@@ -49,6 +49,8 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   String _formattedTimestamp = '';
   List<dynamic> _fetchedOrderItems = [];
   String _declineReason = '';
+  final Map<String, String> _lastNotifiedStatuses = {};
+  String _lastAppliedStatus = '';
 
   int _getStatusPriority(String status) {
     switch (status.toUpperCase()) {
@@ -75,13 +77,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     }
   }
 
-  String get _baseUrl {
-    if (kIsWeb) return 'http://localhost:5000';
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:5000';
-    }
-    return 'http://localhost:5000';
-  }
+  String get _baseUrl => ApiConfig.baseUrl;
 
   @override
   void initState() {
@@ -108,6 +104,8 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         _isLoadingLiveOrder = true;
         _fetchedTotalAmount = widget.totalAmount > 0 ? widget.totalAmount : UserSession.lastPlacedOrderTotal;
         _fetchedOrderItems = widget.initialOrderItems ?? UserSession.lastPlacedOrderItems;
+        _lastAppliedStatus = '';
+        _lastNotifiedStatuses.clear();
       });
       _fetchLatestOrderFromBackend();
     }
@@ -193,14 +191,10 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
 
             // EXPLICIT MATCHING gamit ang firstWhere para iwas state overwrite at orders[0] assumptions
             if (targetOrderId != null) {
-              final targetIdStr = targetOrderId.toString().replaceAll('#BS-', '').trim();
-              final int? targetInt = int.tryParse(targetIdStr);
-
               try {
                 final foundOrder = ordersList.firstWhere((o) {
-                  final idStr = (o['order_id'] ?? o['id'] ?? '').toString().replaceAll('#BS-', '').trim();
-                  final int? idInt = int.tryParse(idStr);
-                  return idStr.isNotEmpty && (idStr == targetIdStr || (targetInt != null && idInt != null && targetInt == idInt));
+                  final dynamic orderEntityId = o['order_id'] ?? o['id'];
+                  return orderEntityId != null && SocketService.isSameOrder(orderEntityId, targetOrderId);
                 });
                 matchingOrder = Map<String, dynamic>.from(foundOrder);
                 final String st = (matchingOrder['status'] ?? matchingOrder['order_status'] ?? '').toString().toUpperCase();
@@ -223,11 +217,17 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         };
       }
 
-      if (currentOrderCompleted || sessionWideCompleted) {
+      if (widget.orderId != null && (currentOrderCompleted || sessionWideCompleted)) {
         final String codeToUse = _fetchedOrderCode.isNotEmpty
             ? _fetchedOrderCode
             : UserSession.formatOrderCode(targetOrderId);
-        _showSessionFinishedDialog(codeToUse);
+        // Only show the finished dialog on an actual transition into a
+        // completed/settled state to avoid duplicate notifications.
+        final bool justTransitionedToFinished =
+            _lastAppliedStatus.isEmpty || _lastAppliedStatus != 'PAID';
+        if (justTransitionedToFinished) {
+          _showSessionFinishedDialog(codeToUse);
+        }
       }
 
       if (matchingOrder != null && mounted) {
@@ -333,40 +333,11 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   }
 
   void _connectRepositorySocketStream() {
-    _repositorySocketGateway = io.io(
-      _baseUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket', 'polling'])
-          .enableAutoConnect()
-          .build(),
+    _socketService.connect(
+      onOrderUpdated: (data) => _applyLiveOrderUpdate(data),
+      onStatusUpdated: (data) => _applyLiveOrderUpdate(data),
+      onSessionClosed: (data) => _handleSessionClosed(data),
     );
-
-    _repositorySocketGateway.onConnect((_) {
-      final int tableNum = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-      _repositorySocketGateway.emit('join_room', 'table_$tableNum');
-
-      final int? sessionId = UserSession.activeSessionId ??
-          (UserSession.sessionId != null ? int.tryParse(UserSession.sessionId!) : null);
-      if (sessionId != null) {
-        _repositorySocketGateway.emit('join_room', 'session_$sessionId');
-      }
-
-      final dynamic activeOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
-      if (activeOrderId != null) {
-        _repositorySocketGateway.emit('join_room', activeOrderId.toString());
-      }
-    });
-
-    _repositorySocketGateway.on('order_updated', _applyLiveOrderUpdate);
-    _repositorySocketGateway.on('order_status_updated', _applyLiveOrderUpdate);
-    _repositorySocketGateway.on('orderStatusUpdated', _applyLiveOrderUpdate);
-    _repositorySocketGateway.on('new_order', _applyLiveOrderUpdate);
-    _repositorySocketGateway.on('additional_items_added', _applyLiveOrderUpdate);
-    _repositorySocketGateway.on('order_paid', _handleSessionClosed);
-    _repositorySocketGateway.on('bill_requested', _applyLiveOrderUpdate);
-    _repositorySocketGateway.on('session_cancelled', _handleSessionClosed);
-    _repositorySocketGateway.on('table_session_closed', _handleSessionClosed);
-    _repositorySocketGateway.connect();
   }
 
   bool _dialogShown = false;
@@ -457,6 +428,13 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   }
 
   void _applyStatusValues(String status) {
+    final String normalizedStatus = status.toUpperCase();
+    // Only treat it as a NEW status transition when the status actually changed.
+    // This prevents duplicate dialogs/notifications when the same status is
+    // re-applied (e.g. duplicate socket events, polling refreshes, refetches).
+    final bool isStatusTransition = _lastAppliedStatus.isEmpty || _lastAppliedStatus != normalizedStatus;
+
+    _lastAppliedStatus = normalizedStatus;
     _currentOrderStatus = status;
     switch (status) {
       case 'NEW':
@@ -485,14 +463,18 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       case 'SETTLED':
         _statusBadgeLabel = 'Paid';
         _stepperProgressIndex = 3;
-        final dynamic targetId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
-        _showSessionFinishedDialog(_fetchedOrderCode.isNotEmpty ? _fetchedOrderCode : UserSession.formatOrderCode(targetId));
+        if (isStatusTransition && widget.orderId != null) {
+          final dynamic targetId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
+          _showSessionFinishedDialog(_fetchedOrderCode.isNotEmpty ? _fetchedOrderCode : UserSession.formatOrderCode(targetId));
+        }
         break;
       case 'REJECTED':
       case 'DECLINED':
         _statusBadgeLabel = 'Order Declined';
         _stepperProgressIndex = 0;
-        _showOrderDeclinedDialog(_declineReason.isNotEmpty ? _declineReason : 'Item Out of Stock');
+        if (isStatusTransition) {
+          _showOrderDeclinedDialog(_declineReason.isNotEmpty ? _declineReason : 'Item Out of Stock');
+        }
         break;
       case 'CANCELLED':
       case 'SESSION_CANCELLED':
@@ -525,7 +507,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
 
     final dynamic targetOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
     if (eventOrderId != null && targetOrderId != null) {
-      if (eventOrderId.toString().replaceAll('#BS-', '').trim() != targetOrderId.toString().replaceAll('#BS-', '').trim()) {
+      // Gumagamit ng normalized na comparison upang mag-handle nang maayos ng
+      // integer at string ticket formats (hal. int 12 vs '#BS-0012').
+      if (!SocketService.isSameOrder(eventOrderId, targetOrderId)) {
         return; // Huwag galawin o i-trigger kung para sa ibang ticket/order!
       }
     }
@@ -543,6 +527,56 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     final String rStr = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? data['decline_reason'] ?? data['reason'] ?? '').toString();
     if (rStr.isNotEmpty) {
       _declineReason = rStr;
+    }
+
+    if (status.isNotEmpty) {
+      final String orderKey = (eventOrderId ?? widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? 'default').toString();
+      if (_lastNotifiedStatuses[orderKey] != status) {
+        _lastNotifiedStatuses[orderKey] = status;
+
+        final String ticketCode = _fetchedOrderCode.isNotEmpty
+            ? _fetchedOrderCode
+            : UserSession.formatOrderCode(eventOrderId ?? widget.orderId ?? UserSession.lastPlacedOrderId);
+
+        Color alertBg = const Color(0xFF203F35);
+        String title = '$ticketCode: Order Status Update';
+        String desc = "Your order status changed to $status";
+        IconData icon = Icons.restaurant_menu;
+
+        if (status == 'PREPARING') {
+          title = '$ticketCode: Order Status: PREPARING';
+          desc = "The kitchen is now preparing your delicious meal.";
+          alertBg = const Color(0xFFD7BC86);
+          icon = Icons.kitchen;
+        } else if (status == 'SERVED' || status == 'READY') {
+          title = status == 'SERVED'
+              ? '$ticketCode: Order Status: SERVED'
+              : '$ticketCode: Order Status: READY';
+          desc = status == 'SERVED'
+              ? "Your order is hot and ready for your table."
+              : "Your order is ready for pickup / service.";
+          alertBg = const Color(0xFF22C55E);
+          icon = Icons.restaurant;
+        } else if (status == 'DECLINED' || status == 'REJECTED') {
+          title = '$ticketCode: Order Status: DECLINED';
+          desc = rStr.isNotEmpty ? "Reason: $rStr" : "Please check with staff for details.";
+          alertBg = const Color(0xFFEF4444);
+          icon = Icons.cancel;
+        } else if (status == 'COMPLETED' || status == 'PAID') {
+          title = '$ticketCode: Payment Completed';
+          desc = "Your table session receipt has been settled.";
+          alertBg = const Color(0xFF10B981);
+          icon = Icons.check_circle;
+        }
+
+        AudioNotificationService.showAggressiveBanner(
+          context: context,
+          title: title,
+          message: desc,
+          backgroundColor: alertBg,
+          icon: icon,
+        );
+      }
     }
 
     setState(() {
@@ -574,7 +608,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
 
     final dynamic targetOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
     if (eventOrderId != null && targetOrderId != null) {
-      if (eventOrderId.toString().replaceAll('#BS-', '').trim() != targetOrderId.toString().replaceAll('#BS-', '').trim()) {
+      // Gumagamit ng normalized na comparison upang mag-handle nang maayos ng
+      // integer at string ticket formats (hal. int 12 vs '#BS-0012').
+      if (!SocketService.isSameOrder(eventOrderId, targetOrderId)) {
         return; // Huwag galawin o i-trigger kung para sa ibang ticket/order!
       }
     }
@@ -586,10 +622,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   @override
   void dispose() {
     _statusPollTimer?.cancel();
-    try {
-      _repositorySocketGateway.disconnect();
-      _repositorySocketGateway.dispose();
-    } catch (_) {}
+    _socketService.disconnect();
     super.dispose();
   }
 
@@ -849,14 +882,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                 ),
               ),
               InkWell(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const AssistanceScreen(),
-                    ),
-                  );
-                },
+                onTap: () => AudioNotificationService.showNotificationHistory(context),
                 borderRadius: BorderRadius.circular(22),
                 child: Container(
                   width: 44,
@@ -1350,9 +1376,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
               ),
             ),
             Text(
-              _repositorySocketGateway.connected
-                  ? 'Live updates'
-                  : 'Reconnecting…',
+              'Live updates',
               style: const TextStyle(fontSize: 10, color: Color(0xFF788078)),
             ),
           ],

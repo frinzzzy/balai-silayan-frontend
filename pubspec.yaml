@@ -16,6 +16,7 @@ dependencies:
   image_picker: ^1.1.2
   cupertino_icons: ^1.0.8
   flutter_dotenv: ^5.1.0
+  audioplayers: ^6.0.0
 
 dev_dependencies:
   flutter_test:
@@ -27,3 +28,4 @@ flutter:
 
   assets:
     - .env
+    - assets/sounds/notification_ring.mp3

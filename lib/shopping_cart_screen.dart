@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:convert';
@@ -8,6 +7,7 @@ import 'checkout_screen.dart';
 import 'assistance_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'user_session.dart';
+import 'config/api_config.dart';
 
 class ShoppingCartScreen extends StatefulWidget {
   final Map<FoodItem, int> cart;
@@ -38,11 +38,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   late io.Socket _cartSocket;
   bool _dialogShown = false;
 
-  String get _baseUrl {
-    if (kIsWeb) return 'http://localhost:5000';
-    if (defaultTargetPlatform == TargetPlatform.android) return 'http://10.0.2.2:5000';
-    return 'http://localhost:5000';
-  }
+  String get _baseUrl => ApiConfig.baseUrl;
 
   @override
   void initState() {
@@ -63,7 +59,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
       _cartSocket = io.io(
         _baseUrl,
         io.OptionBuilder()
-            .setTransports(['websocket'])
+            .setTransports(['websocket', 'polling'])
             .disableAutoConnect()
             .build(),
       );
