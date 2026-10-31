@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../models/admin_order_model.dart';
+import '../services/admin_service.dart';
 
-class SalesAnalyticsScreen extends StatelessWidget {
+class SalesAnalyticsScreen extends StatefulWidget {
   final DailySalesStats stats;
   final List<AdminOrder> orders;
   final VoidCallback onRefresh;
@@ -14,24 +16,163 @@ class SalesAnalyticsScreen extends StatelessWidget {
   });
 
   @override
+  State<SalesAnalyticsScreen> createState() => _SalesAnalyticsScreenState();
+}
+
+class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
+  final AdminService _adminService = AdminService();
+  late DailySalesStats _currentStats;
+  List<dynamic> _chartBreakdown = [];
+  List<TopDishItem> _topDishes = [];
+  String _selectedPeriod = 'today'; // 'today', 'monthly', 'yearly', 'custom'
+  DateTime _selectedDate = DateTime.now();
+  DailySalesStats? _previousStats;
+  bool _isLoading = false;
+
+  final NumberFormat _currencyFormat = NumberFormat.currency(locale: 'en_PH', symbol: '₱', decimalDigits: 2);
+  final NumberFormat _currencyFormatInt = NumberFormat.currency(locale: 'en_PH', symbol: '₱', decimalDigits: 0);
+
+  @override
+  void initState() {
+    super.initState();
+    _currentStats = widget.stats;
+    _fetchFilteredStats(); // ✅ Agad na kinukuha ang tamang analytics data pagka-load para sa default period[cite: 17]
+  }
+
+  // ✅ Live sync ng stats kapag nag-update ang background polling o socket kung 'today' ang naka-select[cite: 17]
+  @override
+  void didUpdateWidget(SalesAnalyticsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.stats != oldWidget.stats && _selectedPeriod == 'today') {
+      setState(() {
+        _currentStats = widget.stats;
+      });
+    }
+  }
+
+  Future<void> _fetchFilteredStats() async {
+    setState(() => _isLoading = true);
+    try {
+      String? startStr;
+      String? endStr;
+      if (_selectedPeriod == 'custom') {
+        startStr = "${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}";
+        endStr = startStr;
+      } else if (_selectedPeriod == 'monthly') {
+        startStr = "${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-01";
+        final lastDay = DateTime(_selectedDate.year, _selectedDate.month + 1, 0).day;
+        endStr = "${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-$lastDay";
+      } else if (_selectedPeriod == 'yearly') {
+        startStr = "${_selectedDate.year}-01-01";
+        endStr = "${_selectedDate.year}-12-31";
+      }
+
+      // Tawagin ang service na nagpapadala ng period at dates sa backend[cite: 17]
+      final result = await _adminService.fetchSalesAnalyticsWithBreakdown(
+        period: _selectedPeriod,
+        startDate: startStr,
+        endDate: endStr,
+      );
+
+      final DailySalesStats? previousStats = await _fetchPreviousPeriodStats();
+
+      if (mounted) {
+        setState(() {
+          _currentStats = result['stats'];
+          _chartBreakdown = result['breakdown'] ?? [];
+          _topDishes = result['top_items'] ?? [];
+          _previousStats = previousStats;
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  /// Kumukuha ng sales stats ng nakaraang period para sa growth/comparison indicator[cite: 17].
+  Future<DailySalesStats?> _fetchPreviousPeriodStats() async {
+    try {
+      String prevPeriod = _selectedPeriod;
+      String? prevStart;
+      String? prevEnd;
+
+      if (_selectedPeriod == 'today') {
+        final DateTime yesterday = _selectedDate.subtract(const Duration(days: 1));
+        prevPeriod = 'custom';
+        prevStart = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
+        prevEnd = prevStart;
+      } else if (_selectedPeriod == 'monthly') {
+        prevPeriod = 'monthly';
+        final DateTime prevMonthStart = DateTime(_selectedDate.year, _selectedDate.month - 1, 1);
+        prevStart = '${prevMonthStart.year}-${prevMonthStart.month.toString().padLeft(2, '0')}-${prevMonthStart.day.toString().padLeft(2, '0')}';
+        final DateTime prevMonthEnd = DateTime(_selectedDate.year, _selectedDate.month, 0);
+        prevEnd = '${prevMonthEnd.year}-${prevMonthEnd.month.toString().padLeft(2, '0')}-${prevMonthEnd.day.toString().padLeft(2, '0')}';
+      } else if (_selectedPeriod == 'yearly') {
+        prevPeriod = 'yearly';
+        final int prevYear = _selectedDate.year - 1;
+        prevStart = '$prevYear-01-01';
+        prevEnd = '$prevYear-12-31';
+      }
+
+      final result = await _adminService.fetchSalesAnalyticsWithBreakdown(
+        period: prevPeriod,
+        startDate: prevStart,
+        endDate: prevEnd,
+      );
+      return result['stats'] as DailySalesStats? ?? DailySalesStats(totalSales: 0.0, totalTransactions: 0, cashSales: 0.0, gcashSales: 0.0);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _navigatePeriod(int amount) {
+    setState(() {
+      if (_selectedPeriod == 'monthly') {
+        _selectedDate = DateTime(_selectedDate.year, _selectedDate.month + amount, 1);
+      } else if (_selectedPeriod == 'yearly') {
+        _selectedDate = DateTime(_selectedDate.year + amount, _selectedDate.month, 1);
+      } else {
+        _selectedDate = _selectedDate.add(Duration(days: amount));
+      }
+    });
+    _fetchFilteredStats();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final double avgOrderVal = stats.totalTransactions > 0 ? (stats.totalSales / stats.totalTransactions) : 0.0;
-    final double unpaidActiveTotal = orders
+    final double avgOrderVal = _currentStats.totalTransactions > 0 ? (_currentStats.totalSales / _currentStats.totalTransactions) : 0.0;
+    final double unpaidActiveTotal = widget.orders
         .where((o) => o.status != 'PAID' && o.status != 'COMPLETED' && o.status != 'REJECTED' && o.status != 'CANCELLED')
         .fold(0.0, (sum, o) => sum + o.totalAmount);
+    final double? growthPercent = (_previousStats != null && _previousStats!.totalSales > 0 && _currentStats.totalSales > 0)
+        ? ((_currentStats.totalSales - _previousStats!.totalSales) / _previousStats!.totalSales) * 100
+        : null;
+
+    String periodLabel = 'Today (${_selectedDate.month}/${_selectedDate.day}/${_selectedDate.year})';
+    if (_selectedPeriod == 'monthly') {
+      final monthName = DateFormat('MMMM yyyy').format(_selectedDate);
+      periodLabel = 'Monthly ($monthName)';
+    } else if (_selectedPeriod == 'yearly') {
+      periodLabel = 'Yearly (${_selectedDate.year})';
+    } else if (_selectedPeriod == 'custom') {
+      periodLabel = 'Specific Date (${_selectedDate.month}/${_selectedDate.day}/${_selectedDate.year})';
+    }
 
     return Container(
       color: const Color(0xFFF8F4EC),
       child: RefreshIndicator(
         color: const Color(0xFF203F35),
-        onRefresh: () async => onRefresh(),
+        onRefresh: () async {
+          widget.onRefresh();
+          await _fetchFilteredStats();
+        },
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Introduction Section
               const Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -54,7 +195,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
 
-              // Reporting Period Selector Card
+              // Reporting Period Selector Card with Dropdown & Navigation Arrows
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -67,25 +208,58 @@ class SalesAnalyticsScreen extends StatelessWidget {
                   children: [
                     const Text('REPORTING PERIOD', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF687368))),
                     const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFFDFA),
-                        border: Border.all(color: const Color(0xFFE5DFD3)),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Row(
-                        children: const [
-                          Icon(Icons.calendar_today_outlined, size: 18, color: Color(0xFF687368)),
-                          SizedBox(width: 8),
-                          Text('Today', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: Color(0xFF203F35))),
-                          Spacer(),
-                          Icon(Icons.keyboard_arrow_down, color: Color(0xFF687368)),
-                        ],
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFFDFA),
+                              border: Border.all(color: const Color(0xFFE5DFD3)),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _selectedPeriod,
+                                isExpanded: true,
+                                items: const [
+                                  DropdownMenuItem(value: 'today', child: Text('Today', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF203F35)))),
+                                  DropdownMenuItem(value: 'monthly', child: Text('Monthly (e.g. September / February)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF203F35)))),
+                                  DropdownMenuItem(value: 'yearly', child: Text('Yearly (2026 / 2027)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF203F35)))),
+                                  DropdownMenuItem(value: 'custom', child: Text('Specific Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF203F35)))),
+                                ],
+                                onChanged: (val) {
+                                  if (val != null) {
+                                    _selectPeriod(val);
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // Navigation Arrows para lumipat ng Period / Araw / Buwan / Taon[cite: 17]
+                        IconButton(
+                          icon: const Icon(Icons.chevron_left, color: Color(0xFF203F35)),
+                          tooltip: 'Previous',
+                          onPressed: () => _navigatePeriod(-1),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.chevron_right, color: Color(0xFF203F35)),
+                          tooltip: 'Next',
+                          onPressed: () => _navigatePeriod(1),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 8),
-                    const Text('Live data synchronization across active station shifts.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Active Period: $periodLabel', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+                        if (_isLoading)
+                          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF203F35))),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -105,9 +279,15 @@ class SalesAnalyticsScreen extends StatelessWidget {
                     const Text('Total Gross Revenue (Recognized Sales)', style: TextStyle(fontSize: 12, color: Color(0xFFD7E3D7))),
                     const SizedBox(height: 8),
                     Text(
-                      '₱${stats.totalSales.toStringAsFixed(2)}',
+                      _currencyFormat.format(_currentStats.totalSales),
                       style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w600, color: Colors.white, height: 1.2),
                     ),
+                    const SizedBox(height: 8),
+                    if (growthPercent != null)
+                      Text(
+                        'Growth vs previous period: ${growthPercent >= 0 ? '+' : ''}${growthPercent.toStringAsFixed(1)}%',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white70, height: 1.2),
+                      ),
                     const SizedBox(height: 8),
                     const Text('Real-time aggregated from settled table orders', style: TextStyle(fontSize: 12, color: Color(0xFFD7E3D7))),
                   ],
@@ -132,7 +312,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
                           const Text('Cash Collections', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
                           const SizedBox(height: 8),
                           Text(
-                            '₱${stats.cashSales.toStringAsFixed(2)}',
+                            _currencyFormat.format(_currentStats.cashSales),
                             style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w600, color: Color(0xFF203F35)),
                           ),
                           const SizedBox(height: 8),
@@ -156,7 +336,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
                           const Text('GCash Verified', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
                           const SizedBox(height: 8),
                           Text(
-                            '₱${stats.gcashSales.toStringAsFixed(2)}',
+                            _currencyFormat.format(_currentStats.gcashSales),
                             style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w600, color: Color(0xFF203F35)),
                           ),
                           const SizedBox(height: 8),
@@ -169,7 +349,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
 
-              // Sales Trend Bar Chart Card
+              // Sales Trend Bar Chart Card with Horizontal Scrollbar & Smooth Physics
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -197,13 +377,29 @@ class SalesAnalyticsScreen extends StatelessWidget {
                     const Text('Live recognized sales summary • Philippine pesos (PHP)', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
                     const SizedBox(height: 16),
                     SizedBox(
-                      height: 200,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          _buildBarItem('Today', 140, '₱${stats.totalSales.toStringAsFixed(0)}', isPeak: true),
-                        ],
+                      height: 210,
+                      child: _chartBreakdown.isEmpty
+                          ? const Center(child: Text('No data available for this period', style: TextStyle(fontSize: 12, color: Color(0xFF687368))))
+                          : Scrollbar(
+                        thumbVisibility: true,
+                        child: ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          itemCount: _chartBreakdown.length,
+                          itemBuilder: (context, index) {
+                            final item = _chartBreakdown[index];
+                            final label = item['label'] ?? '';
+                            final sales = double.tryParse(item['total_sales'].toString()) ?? 0.0;
+                            double barHeight = sales > 0 ? (sales / (_currentStats.totalSales == 0 ? 1 : _currentStats.totalSales)) * 130 : 10;
+                            if (barHeight < 10) barHeight = 10;
+                            if (barHeight > 130) barHeight = 130;
+
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                              child: _buildBarItem(label, barHeight, _currencyFormatInt.format(sales), isPeak: sales == _currentStats.totalSales && sales > 0),
+                            );
+                          },
+                        ),
                       ),
                     ),
                   ],
@@ -226,17 +422,28 @@ class SalesAnalyticsScreen extends StatelessWidget {
                     const SizedBox(height: 6),
                     const Text('Top ordered menu items by volume and revenue contribution.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
                     const SizedBox(height: 16),
-                    _buildDishPerformanceRow('Chicken Inasal', '18 orders', '₱2,160', 1.0),
-                    const SizedBox(height: 12),
-                    _buildDishPerformanceRow('Kare-Kare', '14 orders', '₱2,520', 0.85),
-                    const SizedBox(height: 12),
-                    _buildDishPerformanceRow('Lumpiang Shanghai', '22 orders', '₱1,540', 0.65),
-                    const SizedBox(height: 12),
-                    _buildDishPerformanceRow('Calamansi Cooler', '30 orders', '₱1,500', 0.5),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12.0),
-                      child: Divider(height: 1, color: Color(0xFFE5DFD3)),
-                    ),
+                    if (_isLoading)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12.0),
+                        child: Row(
+                          children: [
+                            CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF203F35)),
+                            SizedBox(width: 8),
+                            Text('Loading dish performance...', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                          ],
+                        ),
+                      )
+                    else if (_topDishes.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12.0),
+                        child: Text('No dish performance data available for this period.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                      )
+                    else ..._topDishes.map((dish) => _buildDishPerformanceRow(dish)),
+                    if (_topDishes.isNotEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12.0),
+                        child: Divider(height: 1, color: Color(0xFFE5DFD3)),
+                      ),
                     const Text('Aggregated based on successful kitchen outputs.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
                   ],
                 ),
@@ -269,13 +476,13 @@ class SalesAnalyticsScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    _buildPaymentRow('Cash collections', '₱${stats.cashSales.toStringAsFixed(2)}'),
+                    _buildPaymentRow('Cash collections', _currencyFormat.format(_currentStats.cashSales)),
                     const SizedBox(height: 8),
-                    _buildPaymentRow('GCash verified', '₱${stats.gcashSales.toStringAsFixed(2)}'),
+                    _buildPaymentRow('GCash verified', _currencyFormat.format(_currentStats.gcashSales)),
                     const SizedBox(height: 8),
-                    _buildPaymentRow('Total transactions count', '${stats.totalTransactions}'),
+                    _buildPaymentRow('Total transactions count', '${_currentStats.totalTransactions}'),
                     const SizedBox(height: 8),
-                    _buildPaymentRow('Average order value', '₱${avgOrderVal.toStringAsFixed(2)}'),
+                    _buildPaymentRow('Average order value', _currencyFormat.format(avgOrderVal)),
                     const SizedBox(height: 8),
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 4.0),
@@ -305,7 +512,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Active unpaid orders total: ₱${unpaidActiveTotal.toStringAsFixed(2)}. Ensure pending tables are settled before closing shifts.',
+                        'Active unpaid orders total: ${_currencyFormat.format(unpaidActiveTotal)}. Ensure pending tables are settled before closing shifts.',
                         style: const TextStyle(fontSize: 12, height: 1.5, color: Color(0xFF53766C)),
                       ),
                     ),
@@ -380,29 +587,40 @@ class SalesAnalyticsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildDishPerformanceRow(String dishName, String volume, String revenue, double progressFactor) {
+  Widget _buildDishPerformanceRow(TopDishItem dish) {
+    final double maxRevenue = _topDishes.fold<double>(0.0, (m, d) => d.revenue > m ? d.revenue : m);
+    final double progress = maxRevenue > 0 ? (dish.revenue / maxRevenue).clamp(0.0, 1.0).toDouble() : 0.0;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(dishName, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF24382F))),
-            Text(revenue, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+            Expanded(
+              child: Text(
+                dish.name,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF24382F)),
+              ),
+            ),
+            Text(
+              _currencyFormat.format(dish.revenue),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF203F35)),
+            ),
           ],
         ),
         const SizedBox(height: 4),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(volume, style: const TextStyle(fontSize: 12, color: Color(0xFF687368))),
+            Text('${dish.quantity} orders', style: const TextStyle(fontSize: 12, color: Color(0xFF687368))),
           ],
         ),
         const SizedBox(height: 6),
         ClipRRect(
           borderRadius: BorderRadius.circular(3),
           child: LinearProgressIndicator(
-            value: progressFactor,
+            value: progress,
             backgroundColor: const Color(0xFFEEE7D9),
             color: const Color(0xFF53766C),
             minHeight: 4,
@@ -410,6 +628,25 @@ class SalesAnalyticsScreen extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  void _selectPeriod(String value) {
+    setState(() => _selectedPeriod = value);
+    if (value == 'custom') {
+      showDatePicker(
+        context: context,
+        initialDate: _selectedDate,
+        firstDate: DateTime(2023),
+        lastDate: DateTime(2030),
+      ).then((picked) {
+        if (picked != null) {
+          setState(() => _selectedDate = picked);
+          _fetchFilteredStats();
+        }
+      });
+    } else {
+      _fetchFilteredStats();
+    }
   }
 
   Widget _buildPaymentRow(String label, String amount) {

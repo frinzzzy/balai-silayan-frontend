@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
+import 'config/api_config.dart';
 
 class FoodAddOn {
   final int id;
@@ -50,6 +51,7 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
   List<FoodAddOn> _availableAddOns = [];
   final Set<FoodAddOn> _selectedAddOns = {};
   bool _isLoadingAddOns = true;
+  String get _baseUrl => ApiConfig.baseUrl;
 
   // Complete Embedded Database Add-Ons Mapping matching PostgreSQL
   final List<FoodAddOn> _databaseAddOns = [
@@ -140,7 +142,7 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
   Future<void> _fetchItemAddOns() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/v1/menu/${widget.foodItem.itemDbId}/add-ons'),
+        Uri.parse('$_baseUrl/api/v1/menu/${widget.foodItem.itemDbId}/add-ons'),
       );
       if (response.statusCode == 200) {
         final decodedData = jsonDecode(response.body);
@@ -306,6 +308,47 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
   }
 
   Widget _buildEditorialPhotoBanner() {
+    final String? img = widget.foodItem.imageUrl;
+    if (img != null && img.startsWith('lib/menus/')) {
+      return Container(
+        height: 220,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFE5DFD3)),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Image.asset(
+            img,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _buildFallbackPhotoContainer(),
+          ),
+        ),
+      );
+    }
+    if (img != null && img.startsWith('http')) {
+      return Container(
+        height: 220,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFE5DFD3)),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Image.network(
+            img,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _buildFallbackPhotoContainer(),
+          ),
+        ),
+      );
+    }
+    return _buildFallbackPhotoContainer();
+  }
+
+  Widget _buildFallbackPhotoContainer() {
     return Container(
       height: 220,
       width: double.infinity,

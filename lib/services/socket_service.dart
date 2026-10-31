@@ -9,7 +9,13 @@ class SocketService {
 
   String get _baseUrl => ApiConfig.baseUrl;
 
-  /// Normalizes an order/ticket ID (int o string, may may kasamang '#BS-' o 'BS-'
+  /// Ginagamit ang mismong _baseUrl para sa cloud/Render HTTPS deployments
+  /// nang maiwasan ang maling port conversion o unsafe port errors.
+  String get _socketUrl {
+    return _baseUrl;
+  }
+
+  /// Normalizes an order/ticket ID (int o string, may kasamang '#BS-' o 'BS-'
   /// prefix) into isang canonical string upang hindi magulo ang integer vs string
   /// ticket formats (hal. int 12, '12', '#BS-0012', at 'BS-12' ay lahat ay '12').
   static String normalizeOrderId(dynamic orderId) {
@@ -17,8 +23,6 @@ class SocketService {
     final String stripped = orderId.toString().trim().replaceAll(RegExp(r'^#?BS-?', caseSensitive: false), '').trim();
     final int? parsed = int.tryParse(stripped);
     if (parsed != null) {
-      // I-normalize ang numerong ticket id para wasiwas ang leading zeros
-      // (hal. '0012' at '12' ay pareho na nang mangangahulugang '12').
       return parsed.toString();
     }
     return stripped.toUpperCase();
@@ -42,14 +46,15 @@ class SocketService {
     Function(dynamic)? onOrderUpdated,
     Function(dynamic)? onStatusUpdated,
     Function(dynamic)? onSessionClosed,
+    Function(dynamic)? onStockUpdated,
+    Function(dynamic)? onBillRequested,
   }) {
     try {
-      // 1. Transport Configuration na may websocket at polling fallback para maiwasan ang ERR_CONNECTION_REFUSED
-      // 2. Reconnection logic na may auto-reconnect at delay
       _socket = io.io(
-        _baseUrl,
+        _socketUrl,
         io.OptionBuilder()
             .setTransports(['websocket', 'polling'])
+            .setPath('/socket.io')
             .enableAutoConnect()
             .setReconnectionAttempts(99999)
             .setReconnectionDelay(1000)
@@ -57,12 +62,9 @@ class SocketService {
             .build(),
       );
 
-      // 3. Error Handling & Comprehensive Logging Debug Listeners
       _socket.onConnect((_) {
         _isConnected = true;
         debugPrint('⚡ [SocketService] Connected successfully to $_baseUrl (ID: ${_socket.id})');
-
-        // Muling isagawa ang pag-join sa mga rooms sakaling nagkonekta o nag-reconnect
         _rejoinRooms();
       });
 
@@ -90,7 +92,6 @@ class SocketService {
         debugPrint('🔌 [SocketService] Disconnected from server. Reason: $reason');
       });
 
-      // Event listeners para sa real-time updates
       if (onOrderUpdated != null) {
         _socket.on('order_updated', (data) => onOrderUpdated(data));
         _socket.on('additional_items_added', (data) => onOrderUpdated(data));
@@ -101,12 +102,22 @@ class SocketService {
         _socket.on('order_status_updated', (data) => onStatusUpdated(data));
         _socket.on('orderStatusUpdated', (data) => onStatusUpdated(data));
         _socket.on('order_paid', (data) => onStatusUpdated(data));
-        _socket.on('bill_requested', (data) => onStatusUpdated(data));
+      }
+
+      // Dedicated handler para sa bill request events (hindi na ito dadaan sa
+      // order status update para hindi malito ang live order tracking state).
+      if (onBillRequested != null) {
+        _socket.on('bill_requested', (data) => onBillRequested(data));
       }
 
       if (onSessionClosed != null) {
         _socket.on('table_session_closed', (data) => onSessionClosed(data));
         _socket.on('session_cancelled', (data) => onSessionClosed(data));
+      }
+
+      if (onStockUpdated != null) {
+        _socket.on('stock_updated', (data) => onStockUpdated(data));
+        _socket.on('menu_stock_updated', (data) => onStockUpdated(data));
       }
 
       _socket.connect();
@@ -139,7 +150,6 @@ class SocketService {
       _socket.emit('join_room', roomName);
       debugPrint('📂 [SocketService] Joined room: $roomName');
     } else {
-      // Kung offline pa, i-queue o i-emit agad kapag nag-connect na
       try {
         _socket.emit('join_room', roomName);
       } catch (_) {}

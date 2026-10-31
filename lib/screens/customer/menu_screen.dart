@@ -15,6 +15,8 @@ import '../auth/qr_scanner_screen.dart';
 import 'order_type_selection_screen.dart';
 import '../../session_bill_screen.dart';
 import '../../models/user_session.dart';
+import '../../config/api_config.dart';
+import '../../services/audio_notification_service.dart';
 
 class FoodItem {
   final int itemDbId;
@@ -24,54 +26,103 @@ class FoodItem {
   final bool isAvailable;
   final String? imageUrl;
 
+  static String getLocalMenuImage(String dishName) {
+    final String clean = dishName.trim().toLowerCase();
+    if (clean.contains('bibimbap')) return 'lib/menus/Bibimbap.jpg';
+    if (clean.contains('chopsuey')) return 'lib/menus/Chopsuey.jpg';
+    if (clean.contains('pinakbet')) return 'lib/menus/Pinakbet.jpg';
+    if (clean.contains('tapsilog')) return 'lib/menus/Tapsilog.jpg';
+    if (clean.contains('java rice')) return 'lib/menus/Java Rice.jpg';
+    if (clean.contains('porksilog')) return 'lib/menus/Porksilog.jpg';
+    if (clean.contains('bangusilog')) return 'lib/menus/Bangusilog.jpg';
+    if (clean.contains('leche flan')) return 'lib/menus/Leche Flan.jpg';
+    if (clean.contains('mike bihon')) return 'lib/menus/Mike Bihon.jpg';
+    if (clean.contains('garlic rice')) return 'lib/menus/Garlic Rice.jpg';
+    if (clean.contains('plain wings')) return 'lib/menus/Plain Wings.jpg';
+    if (clean.contains('caesar salad')) return 'lib/menus/Caesar Salad.jpg';
+    if (clean.contains('chickensilog')) return 'lib/menus/Chickensilog.jpg';
+    if (clean.contains('coke')) return 'lib/menus/Coke Regular.jpg';
+    if (clean.contains('fries')) return 'lib/menus/French Fries.jpg';
+    if (clean.contains('bihon')) return 'lib/menus/Pancit Bihon.jpg';
+    if (clean.contains('blue lemonade')) return 'lib/menus/Blue Lemonade.jpg';
+    if (clean.contains('water') || clean.contains('bottled')) return 'lib/menus/Bottled Water.jpg';
+    if (clean.contains('buffalo')) return 'lib/menus/Buffalo Wings.jpg';
+    if (clean.contains('canton')) return 'lib/menus/Pansit Canton.jpg';
+    if (clean.contains('tofu')) return 'lib/menus/Sizzling Tofu.jpg';
+    if (clean.contains('macaroni') || clean.contains('mac')) return 'lib/menus/Baked Macaroni.jpg';
+    if (clean.contains('bulalo')) return 'lib/menus/Bulalo Special.jpg';
+    if (clean.contains('fish')) return 'lib/menus/Fish and Chips.jpg';
+    if (clean.contains('nachos')) return 'lib/menus/Nachos Supreme.jpg';
+    if (clean.contains('sprite')) return 'lib/menus/Sprite (330ml).jpg';
+    if (clean.contains('tea')) return 'lib/menus/Iced Tea (Glass).jpg';
+    if (clean.contains('sizzling chicken')) return 'lib/menus/Sizzling Chicken.jpg';
+    if (clean.contains('carbonara') || clean.contains('carbonarra')) return 'lib/menus/Creamy Carbonarra.jpg';
+    if (clean.contains('halo')) return 'lib/menus/Halo-Halo Special.jpg';
+    if (clean.contains('hawaiian')) return 'lib/menus/Hawaiian Overload.jpg';
+    if (clean.contains('kare')) return 'lib/menus/Kare-Kare (Labot).jpg';
+    if (clean.contains('kimchi')) return 'lib/menus/Kimchi Fried Rice.jpg';
+    if (clean.contains('mango') || clean.contains('panna cotta')) return 'lib/menus/Mango Panna Cotta.jpg';
+    if (clean.contains('pepperoni')) return 'lib/menus/Pepperoni Classic.jpg';
+    if (clean.contains('plain rice') || clean.contains('rice')) return 'lib/menus/Plain Rice (Solo).jpg';
+    if (clean.contains('sinigang')) return 'lib/menus/Sinigang na Baboy.jpg';
+    if (clean.contains('honey') || clean.contains('garlic wings')) return 'lib/menus/Honey Garlic Wings.jpg';
+    if (clean.contains('tuna')) return 'lib/menus/Tuna Melt Sandwich.jpg';
+    if (clean.contains('sisig')) return 'lib/menus/Sizzling Pork Sisig.jpg';
+    if (clean.contains('supreme pizza') || clean.contains('pizza')) return 'lib/menus/Super Supreme Pizza.jpg';
+    if (clean.contains('ham')) return 'lib/menus/Ham and Cheese Sandwich.jpg';
+    if (clean.contains('spaghetti')) return 'lib/menus/Filipino Style Spaghetti.jpg';
+    if (clean.contains('clubhouse') || clean.contains('sandwich')) return 'lib/menus/Clubhouse Sandwich with Fries.jpg';
+    return 'lib/menus/Pancit Bihon.jpg';
+  }
+
   static final Map<int, String> hardcodedImageUrls = {
-    1: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624', // Bihon
-    2: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624', // Mike Bihon
-    3: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841', // Pansit Canton
-    4: 'https://images.unsplash.com/photo-1552611052-33e04de081de', // Pansit Bihon Guisado
-    5: 'https://images.unsplash.com/photo-1621996346565-e3d5d6281222', // Filipino Style Spaghetti
-    6: 'https://images.unsplash.com/photo-1633964913295-ceb43826e7c9', // Creamy Carbonara
-    7: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6', // Baked Macaroni
-    8: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af', // Clubhouse Sandwich W/ Fries
-    9: 'https://images.unsplash.com/photo-1550547660-d9450f859349', // Ham and Cheese Sandwich
-    10: 'https://images.unsplash.com/photo-1539252554453-80ab65ce3586', // Tuna Melt Sandwich
-    11: 'https://images.unsplash.com/photo-1567620832903-9fc6debc209f', // Plain Wings
-    12: 'https://images.unsplash.com/photo-1608039829572-78524f79c4c7', // Buffalo Wings
-    13: 'https://images.unsplash.com/photo-1527477396000-e27163b481c2', // Honey Garlic Wings
-    14: 'https://images.unsplash.com/photo-1540420773420-3366772f4999', // Caesar Salad
-    15: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd', // Chopsuey
-    16: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c', // Pinakbet
-    17: 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1', // Kare-Kare (Labot)
-    18: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6', // Bulalo Special
-    19: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624', // Sinigang na Baboy
-    20: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46', // Sizzling Chicken
-    21: 'https://images.unsplash.com/photo-1544025162-d76694265947', // Sizzling Pork Sisig
-    22: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c', // Sizzling Tofu
-    23: 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877', // French Fries
-    24: 'https://images.unsplash.com/photo-1513456852971-30c0b8199d4d', // Nachos Supreme
-    25: 'https://images.unsplash.com/photo-1534422298391-e4f8c172dddb', // Fish and Chips
-    26: 'https://images.unsplash.com/photo-1555126634-323283e090fa', // Tapsilog
-    27: 'https://images.unsplash.com/photo-1544025162-d76694265947', // Porksilog
-    28: 'https://images.unsplash.com/photo-1567620832903-9fc6debc209f', // Chickensilog
-    29: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2', // Bangusilog
-    30: 'https://images.unsplash.com/photo-1513104890138-7c749659a591', // Super Supreme Pizza
-    31: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38', // Hawaiian Overload
-    32: 'https://images.unsplash.com/photo-1534308983496-4fabb1a015ee', // Pepperoni Classic
-    33: 'https://images.unsplash.com/photo-1548839140-29a749e1cf4d', // Bottled Water
-    34: 'https://images.unsplash.com/photo-1556679343-c7306c1976bc', // Iced Tea (Glass)
-    35: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd', // Blue Lemonade
-    36: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97', // Coke Regular (330ml)
-    37: 'https://images.unsplash.com/photo-1625772299848-391b6a87d7b3', // Sprite (330ml)
-    38: 'https://images.unsplash.com/photo-1516684732162-798a0062be99', // Plain Rice (Solo)
-    39: 'https://images.unsplash.com/photo-1512058564366-18510be2db19', // Garlic Rice
-    40: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6', // Java Rice
-    41: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb', // Halo-Halo Special
-    42: 'https://images.unsplash.com/photo-1509440159596-0249088772ff', // Leche Flan
-    43: 'https://images.unsplash.com/photo-1488477181946-6428a0291777', // Mango Panna Cotta
-    44: 'https://images.unsplash.com/photo-1553163147-622ab57be1c2', // Bibimbap
-    45: 'https://images.unsplash.com/photo-1590301157890-4810ed352733', // Kimchi Fried Rice
-    46: 'https://images.unsplash.com/photo-1541658016709-82535e94bc69', // Tteokbokki
-    47: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624', // Ramen with Cheese
+    1: 'lib/menus/Pancit Bihon.jpg',
+    2: 'lib/menus/Mike Bihon.jpg',
+    3: 'lib/menus/Pansit Canton.jpg',
+    4: 'lib/menus/Pancit Bihon.jpg',
+    5: 'lib/menus/Filipino Style Spaghetti.jpg',
+    6: 'lib/menus/Creamy Carbonarra.jpg',
+    7: 'lib/menus/Baked Macaroni.jpg',
+    8: 'lib/menus/Clubhouse Sandwich with Fries.jpg',
+    9: 'lib/menus/Ham and Cheese Sandwich.jpg',
+    10: 'lib/menus/Tuna Melt Sandwich.jpg',
+    11: 'lib/menus/Plain Wings.jpg',
+    12: 'lib/menus/Buffalo Wings.jpg',
+    13: 'lib/menus/Honey Garlic Wings.jpg',
+    14: 'lib/menus/Caesar Salad.jpg',
+    15: 'lib/menus/Chopsuey.jpg',
+    16: 'lib/menus/Pinakbet.jpg',
+    17: 'lib/menus/Kare-Kare (Labot).jpg',
+    18: 'lib/menus/Bulalo Special.jpg',
+    19: 'lib/menus/Sinigang na Baboy.jpg',
+    20: 'lib/menus/Sizzling Chicken.jpg',
+    21: 'lib/menus/Sizzling Pork Sisig.jpg',
+    22: 'lib/menus/Sizzling Tofu.jpg',
+    23: 'lib/menus/French Fries.jpg',
+    24: 'lib/menus/Nachos Supreme.jpg',
+    25: 'lib/menus/Fish and Chips.jpg',
+    26: 'lib/menus/Tapsilog.jpg',
+    27: 'lib/menus/Porksilog.jpg',
+    28: 'lib/menus/Chickensilog.jpg',
+    29: 'lib/menus/Bangusilog.jpg',
+    30: 'lib/menus/Super Supreme Pizza.jpg',
+    31: 'lib/menus/Hawaiian Overload.jpg',
+    32: 'lib/menus/Pepperoni Classic.jpg',
+    33: 'lib/menus/Bottled Water.jpg',
+    34: 'lib/menus/Iced Tea (Glass).jpg',
+    35: 'lib/menus/Blue Lemonade.jpg',
+    36: 'lib/menus/Coke Regular.jpg',
+    37: 'lib/menus/Sprite (330ml).jpg',
+    38: 'lib/menus/Plain Rice (Solo).jpg',
+    39: 'lib/menus/Garlic Rice.jpg',
+    40: 'lib/menus/Java Rice.jpg',
+    41: 'lib/menus/Halo-Halo Special.jpg',
+    42: 'lib/menus/Leche Flan.jpg',
+    43: 'lib/menus/Mango Panna Cotta.jpg',
+    44: 'lib/menus/Bibimbap.jpg',
+    45: 'lib/menus/Kimchi Fried Rice.jpg',
+    46: 'lib/menus/Sizzling Tofu.jpg',
+    47: 'lib/menus/Baked Macaroni.jpg',
   };
 
   FoodItem({
@@ -81,20 +132,21 @@ class FoodItem {
     required this.categoryId,
     this.isAvailable = true,
     String? imageUrl,
-  }) : imageUrl = imageUrl ?? hardcodedImageUrls[itemDbId] ?? 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624';
+  }) : imageUrl = imageUrl ?? hardcodedImageUrls[itemDbId] ?? getLocalMenuImage(name);
 
   factory FoodItem.fromJson(Map<String, dynamic> json) {
     final int id = json['id'] ?? 0;
+    final String name = json['name'] ?? 'Delicious Dish';
     final String? dbImg = json['image_url'];
-    final String fallbackImg = hardcodedImageUrls[id] ?? 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624';
+    final String fallbackImg = hardcodedImageUrls[id] ?? getLocalMenuImage(name);
 
     return FoodItem(
       itemDbId: id,
-      name: json['name'] ?? 'Delicious Dish',
+      name: name,
       price: double.tryParse(json['price']?.toString() ?? '0.0') ?? 0.0,
       categoryId: json['category_id'] ?? 1,
       isAvailable: json['is_available'] ?? true,
-      imageUrl: (dbImg != null && dbImg.isNotEmpty) ? dbImg : fallbackImg,
+      imageUrl: (dbImg != null && dbImg.isNotEmpty && !dbImg.startsWith('http')) ? dbImg : fallbackImg,
     );
   }
 }
@@ -133,6 +185,7 @@ class _MenuScreenState extends State<MenuScreen> {
   bool _isLoading = true;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  String get _baseUrl => ApiConfig.baseUrl;
 
   root_menu.FoodItem _toRootFoodItem(FoodItem item) {
     return root_menu.FoodItem(
@@ -856,7 +909,7 @@ class _MenuScreenState extends State<MenuScreen> {
   Future<void> _fetchCategoriesFromBackend() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/v1/categories'),
+        Uri.parse('$_baseUrl/api/v1/categories'),
       );
       if (response.statusCode == 200) {
         final Map<String, dynamic> decodedData = jsonDecode(response.body);
@@ -881,7 +934,7 @@ class _MenuScreenState extends State<MenuScreen> {
   Future<void> _fetchLiveDatabaseMenu() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/v1/menu'),
+        Uri.parse('$_baseUrl/api/v1/menu'),
       );
       if (response.statusCode == 200) {
         final Map<String, dynamic> decodedData = jsonDecode(response.body);
@@ -926,7 +979,7 @@ class _MenuScreenState extends State<MenuScreen> {
   Future<List<Map<String, dynamic>>> _fetchTableStatuses() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/v1/tables'),
+        Uri.parse('$_baseUrl/api/v1/tables'),
       );
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
@@ -1456,41 +1509,8 @@ class _MenuScreenState extends State<MenuScreen> {
           ),
           Row(
             children: [
-              IconButton(
-                icon: const Icon(
-                  Icons.qr_code_scanner,
-                  color: Color(0xFF203F35),
-                  size: 22,
-                ),
-                tooltip: 'Scan Table QR',
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const QrScannerScreen(),
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(
-                  Icons.point_of_sale_outlined,
-                  color: Color(0xFF203F35),
-                  size: 22,
-                ),
-                tooltip: 'Cashier Station',
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const OrdersScreen(cartItems: []),
-                  ),
-                ),
-              ),
               InkWell(
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const AssistanceScreen(),
-                  ),
-                ),
+                onTap: () => AudioNotificationService.showNotificationHistory(context),
                 borderRadius: BorderRadius.circular(22),
                 child: Container(
                   width: 44,
@@ -1730,6 +1750,63 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 
+  Widget _buildFoodItemImageWidget(FoodItem foodItem) {
+    final String? imgUrl = foodItem.imageUrl;
+    if (imgUrl != null && imgUrl.startsWith('lib/menus/')) {
+      return Image.asset(
+        imgUrl,
+        width: double.infinity,
+        height: 118,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _buildFallbackFoodBox(foodItem),
+      );
+    }
+    if (imgUrl != null && imgUrl.startsWith('http')) {
+      return Image.network(
+        imgUrl,
+        width: double.infinity,
+        height: 118,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _buildFallbackFoodBox(foodItem),
+      );
+    }
+    return _buildFallbackFoodBox(foodItem);
+  }
+
+  Widget _buildFallbackFoodBox(FoodItem foodItem) {
+    return Container(
+      height: 118,
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: Color(0xFFEEE7D9),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(18),
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              _getCategoryIcon(foodItem.categoryId),
+              size: 36,
+              color: const Color(0xFF203F35),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              foodItem.name.isNotEmpty ? foodItem.name.substring(0, 1) : 'D',
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFFA47C3D),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildFoodGrid(List<FoodItem> items, int columns) {
     if (items.isEmpty) {
       return const Center(
@@ -1791,40 +1868,11 @@ class _MenuScreenState extends State<MenuScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  height: 118,
-                  width: double.infinity,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFEEE7D9),
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(18),
-                    ),
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(18),
                   ),
-                  child: Stack(
-                    children: [
-                      Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              _getCategoryIcon(foodItem.categoryId),
-                              size: 36,
-                              color: const Color(0xFF203F35),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              foodItem.name.substring(0, 1),
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w900,
-                                color: Color(0xFFA47C3D),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: _buildFoodItemImageWidget(foodItem),
                 ),
                 Expanded(
                   child: Padding(
@@ -2036,8 +2084,8 @@ class _MenuScreenState extends State<MenuScreen> {
                   ),
                   elevation: 0,
                 ),
-                onPressed: () {
-                  Navigator.push(
+                onPressed: () async {
+                  final updatedCart = await Navigator.push<dynamic>(
                     context,
                     MaterialPageRoute(
                       builder: (context) => ShoppingCartScreen(
@@ -2048,6 +2096,13 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     ),
                   );
+
+                  if (updatedCart != null && mounted) {
+                    setState(() {
+                      _orderCart.clear();
+                      _orderCart.addAll(updatedCart);
+                    });
+                  }
                 },
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2101,8 +2156,8 @@ class _MenuScreenState extends State<MenuScreen> {
               _buildNavItem(
                 Icons.shopping_bag_outlined,
                 'Cart',
-                onTap: () {
-                  Navigator.push(
+                onTap: () async {
+                  final updatedCart = await Navigator.push<dynamic>(
                     context,
                     MaterialPageRoute(
                       builder: (context) => ShoppingCartScreen(
@@ -2113,6 +2168,13 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     ),
                   );
+
+                  if (updatedCart != null && mounted) {
+                    setState(() {
+                      _orderCart.clear();
+                      _orderCart.addAll(updatedCart);
+                    });
+                  }
                 },
               ),
               _buildNavItem(

@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'menu_screen.dart';
 import '../../assistance_screen.dart';
 import '../../models/user_session.dart';
+import '../../config/api_config.dart';
 
 class OrderTypeSelectionScreen extends StatefulWidget {
   final int tableNumber;
@@ -31,6 +32,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
   int? _resolvedTableId;
   int? _resolvedTableNumber;
   List<dynamic> _unfinishedOrders = [];
+  String get _baseUrl => ApiConfig.baseUrl;
 
   @override
   void initState() {
@@ -53,7 +55,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
       final response = await http
           .get(
             Uri.parse(
-              'http://localhost:5000/api/v1/orders/unfinished?table_id=$tableId',
+              '$_baseUrl/api/v1/orders/unfinished?table_id=$tableId',
             ),
           )
           .timeout(const Duration(seconds: 5));
@@ -81,7 +83,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
     setState(() => _isLoadingSession = true);
     try {
       final response = await http
-          .get(Uri.parse('http://localhost:5000/api/session/scan/$token'))
+          .get(Uri.parse('$_baseUrl/api/session/scan/$token'))
           .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {

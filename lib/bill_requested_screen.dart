@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
 import 'user_session.dart';
+import 'config/api_config.dart';
 
 class BillRequestedScreen extends StatefulWidget {
   final int? tableId;
@@ -25,6 +28,119 @@ class BillRequestedScreen extends StatefulWidget {
 }
 
 class _BillRequestedScreenState extends State<BillRequestedScreen> {
+  late io.Socket _socket;
+  String get _baseUrl => ApiConfig.baseUrl;
+  String? _billRequestedAt;
+
+  String get _socketUrl {
+    var url = _baseUrl;
+    if (url.startsWith('https://')) {
+      url = 'wss://${url.substring('https://'.length)}';
+    } else if (url.startsWith('http://')) {
+      url = 'ws://${url.substring('http://'.length)}';
+    }
+    return url;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _notifyBackendBillRequest();
+    _connectBillSocket();
+  }
+
+  Future<void> _notifyBackendBillRequest() async {
+    try {
+      final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
+      final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+
+      final Uri requestUri = sessionId != null
+          ? Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill')
+          : Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill');
+
+      final token = UserSession.activeSessionToken;
+      final Map<String, String> headers = {
+        "Content-Type": "application/json",
+        if (token != null && token.isNotEmpty) "Authorization": "Bearer $token",
+      };
+
+      await http.get(requestUri, headers: headers);
+    } catch (_) {}
+  }
+
+  void _connectBillSocket() {
+    try {
+      _socket = io.io(
+        _socketUrl,
+        io.OptionBuilder()
+            .setTransports(['websocket', 'polling'])
+            .enableAutoConnect()
+            .build(),
+      );
+
+      _socket.onConnect((_) {
+        final int? tableId = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber;
+        if (tableId != null) {
+          _socket.emit('join_room', 'table_$tableId');
+        }
+        final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+        if (sessionId != null) {
+          _socket.emit('join_room', 'session_$sessionId');
+        }
+      });
+
+      _socket.on('order_paid', _handleSessionSettled);
+      _socket.on('table_session_closed', _handleSessionSettled);
+      _socket.on('session_cancelled', _handleSessionSettled);
+      _socket.on('bill_requested', _handleBillRequestedEvent);
+      _socket.connect();
+    } catch (_) {}
+  }
+
+  void _handleBillRequestedEvent(dynamic data) {
+    if (!mounted) return;
+    setState(() {
+      _billRequestedAt = data is Map ? (data['bill_requested_at'] ?? data['requested_at'] ?? '').toString() : null;
+    });
+  }
+
+  void _handleSessionSettled(dynamic data) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Payment Confirmed', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        content: const Text('Na-confirm na ng staff ang iyong bayad. Maraming salamat sa paghain sa Balai Silayan!'),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              UserSession.clearSession();
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (context) => const MenuScreen()),
+                    (route) => false,
+              );
+            },
+            child: const Text('Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    try {
+      _socket.disconnect();
+      _socket.dispose();
+    } catch (_) {}
+    super.dispose();
+  }
+
   void _navigateToMenu() {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (context) => const MenuScreen()),
@@ -213,20 +329,25 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
   }
 
   Widget _buildStatusBadge() {
+    final bool isBillRequested = _billRequestedAt != null;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFEEE7D9),
+        color: isBillRequested ? const Color(0xFFEAF0E9) : const Color(0xFFEEE7D9),
         borderRadius: BorderRadius.circular(100),
       ),
-      child: const Row(
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.access_time, size: 13, color: Color(0xFFA47C3D)),
-          SizedBox(width: 6),
+          Icon(Icons.access_time, size: 13, color: isBillRequested ? const Color(0xFF203F35) : const Color(0xFFA47C3D)),
+          const SizedBox(width: 6),
           Text(
-            'Awaiting staff arrival',
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFFA47C3D)),
+            isBillRequested ? 'Bill Requested' : 'Awaiting staff arrival',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: isBillRequested ? const Color(0xFF203F35) : const Color(0xFFA47C3D),
+            ),
           ),
         ],
       ),

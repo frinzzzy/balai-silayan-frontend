@@ -3,10 +3,10 @@ import 'screens/admin/models/admin_order_model.dart';
 import 'screens/admin/services/admin_service.dart';
 import 'screens/admin/screens/order_queue_screen.dart';
 import 'screens/admin/screens/sales_analytics_screen.dart';
+import 'screens/admin/screens/stock_management_screen.dart';
 import 'services/socket_service.dart';
 import 'models/user_session.dart';
 import 'theme/app_theme.dart';
-import 'qr_scanner_screen.dart';
 import 'config/api_config.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -21,6 +21,9 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final AdminService _adminService = AdminService();
   final SocketService _socketService = SocketService();
+
+  // 🔑 GlobalKey para direktang tawagin ang pag-refresh ng stock screen
+  final GlobalKey<StockManagementScreenState> _stockScreenKey = GlobalKey<StockManagementScreenState>();
 
   bool _isLoggedIn = false;
   final bool _isApiConnected = true; // Locked to production API
@@ -61,6 +64,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       onOrderUpdated: (_) => _loadDashboardData(silent: true),
       onStatusUpdated: (_) => _loadDashboardData(silent: true),
       onSessionClosed: (_) => _loadDashboardData(silent: true),
+      onBillRequested: (_) => _loadDashboardData(silent: true),
+      onStockUpdated: (_) {
+        _loadDashboardData(silent: true);
+        _stockScreenKey.currentState?.loadInventorySilently();
+      },
     );
   }
 
@@ -137,14 +145,36 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   void _handleLogout() {
-    _socketService.disconnect();
-    UserSession.clearSession();
-    AdminService.staffAuthToken = null;
-    if (!mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (context) => const AdminDashboardScreen()),
-      (route) => false,
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Confirm Logout', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        content: const Text('Are you sure you want to log out from the admin portal?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF788078))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _socketService.disconnect();
+              UserSession.clearSession();
+              AdminService.staffAuthToken = null;
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const AdminDashboardScreen()),
+                (route) => false,
+              );
+            },
+            child: const Text('Log Out', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -230,42 +260,50 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator(color: Color(0xFF203F35)))
                     : IndexedStack(
-                        index: _currentTabIndex,
-                        children: [
-                          OrderQueueScreen(
-                            orders: _orders,
-                            onActionTriggered: _handleActionTriggered,
-                            onRefresh: _loadDashboardData,
-                          ),
-                          SalesAnalyticsScreen(
-                            stats: _salesStats,
-                            orders: _orders,
-                            onRefresh: _loadDashboardData,
-                          ),
-                        ],
-                      ),
+                  index: _currentTabIndex,
+                  children: [
+                    OrderQueueScreen(
+                      orders: _orders,
+                      onActionTriggered: _handleActionTriggered,
+                      onRefresh: _loadDashboardData,
+                    ),
+                    SalesAnalyticsScreen(
+                      stats: _salesStats,
+                      orders: _orders,
+                      onRefresh: _loadDashboardData,
+                    ),
+                    StockManagementScreen(
+                      key: _stockScreenKey,
+                      onRefresh: _loadDashboardData,
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
           bottomNavigationBar: isDesktop
               ? null
               : BottomNavigationBar(
-                  currentIndex: _currentTabIndex,
-                  onTap: (idx) => setState(() => _currentTabIndex = idx),
-                  backgroundColor: const Color(0xFF19382F),
-                  selectedItemColor: const Color(0xFFC3AA7F),
-                  unselectedItemColor: Colors.white60,
-                  items: const [
-                    BottomNavigationBarItem(
-                      icon: Icon(Icons.receipt_long_outlined),
-                      label: 'Order Queue',
-                    ),
-                    BottomNavigationBarItem(
-                      icon: Icon(Icons.analytics_outlined),
-                      label: 'Sales Analytics',
-                    ),
-                  ],
-                ),
+            currentIndex: _currentTabIndex,
+            onTap: (idx) => setState(() => _currentTabIndex = idx),
+            backgroundColor: const Color(0xFF19382F),
+            selectedItemColor: const Color(0xFFC3AA7F),
+            unselectedItemColor: Colors.white60,
+            items: const [
+              BottomNavigationBarItem(
+                icon: Icon(Icons.receipt_long_outlined),
+                label: 'Order Queue',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.analytics_outlined),
+                label: 'Sales Analytics',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.inventory_2_outlined),
+                label: 'Stock Mgmt',
+              ),
+            ],
+          ),
         );
       },
     );
@@ -275,6 +313,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final navItems = [
       {'index': 0, 'icon': Icons.receipt_long_outlined, 'label': 'Order queue'},
       {'index': 1, 'icon': Icons.analytics_outlined, 'label': 'Sales analytics'},
+      {'index': 2, 'icon': Icons.inventory_2_outlined, 'label': 'Stock management'},
     ];
 
     return Container(
@@ -425,24 +464,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     child: _isLoggingIn
                         ? const CircularProgressIndicator(color: Colors.white)
                         : const Text(
-                            'Access Dashboard',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                          ),
+                      'Access Dashboard',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 24),
-                TextButton.icon(
-                  style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFF687368),
-                  ),
-                  icon: const Icon(Icons.arrow_back, size: 16),
-                  label: const Text('Back to QR Login'),
-                  onPressed: () {
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(builder: (context) => const QrScannerScreen()),
-                    );
-                  },
                 ),
               ],
             ),

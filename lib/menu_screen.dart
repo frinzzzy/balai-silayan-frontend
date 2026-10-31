@@ -3,14 +3,11 @@ import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:convert';
 import 'dart:async';
-import 'orders_screen.dart';
 import 'order_status_screen.dart';
 import 'shopping_cart_screen.dart';
 import 'food_details_screen.dart';
-import 'qr_scanner_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'session_bill_screen.dart';
-import 'admin_dashboard_screen.dart';
 import 'user_session.dart';
 import 'services/audio_notification_service.dart';
 import 'services/socket_service.dart';
@@ -24,22 +21,104 @@ class FoodItem {
   final bool isAvailable;
   final String? imageUrl;
 
+  static String getLocalMenuImage(String dishName) {
+    final String clean = dishName.trim().toLowerCase();
+    if (clean.contains('bibimbap')) return 'lib/menus/Bibimbap.jpg';
+    if (clean.contains('chopsuey')) return 'lib/menus/Chopsuey.jpg';
+    if (clean.contains('pinakbet')) return 'lib/menus/Pinakbet.jpg';
+    if (clean.contains('tapsilog')) return 'lib/menus/Tapsilog.jpg';
+    if (clean.contains('java rice')) return 'lib/menus/Java Rice.jpg';
+    if (clean.contains('porksilog')) return 'lib/menus/Porksilog.jpg';
+    if (clean.contains('bangusilog')) return 'lib/menus/Bangusilog.jpg';
+    if (clean.contains('leche flan')) return 'lib/menus/Leche Flan.jpg';
+    if (clean.contains('mike bihon')) return 'lib/menus/Mike Bihon.jpg';
+    if (clean.contains('garlic rice')) return 'lib/menus/Garlic Rice.jpg';
+    if (clean.contains('plain wings')) return 'lib/menus/Plain Wings.jpg';
+    if (clean.contains('caesar salad')) return 'lib/menus/Caesar Salad.jpg';
+    if (clean.contains('chickensilog')) return 'lib/menus/Chickensilog.jpg';
+    if (clean.contains('coke')) return 'lib/menus/Coke Regular.jpg';
+    if (clean.contains('fries')) return 'lib/menus/French Fries.jpg';
+    if (clean.contains('bihon')) return 'lib/menus/Pancit Bihon.jpg';
+    if (clean.contains('blue lemonade')) return 'lib/menus/Blue Lemonade.jpg';
+    if (clean.contains('water') || clean.contains('bottled')) return 'lib/menus/Bottled Water.jpg';
+    if (clean.contains('buffalo')) return 'lib/menus/Buffalo Wings.jpg';
+    if (clean.contains('canton')) return 'lib/menus/Pansit Canton.jpg';
+    if (clean.contains('tofu')) return 'lib/menus/Sizzling Tofu.jpg';
+    if (clean.contains('macaroni') || clean.contains('mac')) return 'lib/menus/Baked Macaroni.jpg';
+    if (clean.contains('bulalo')) return 'lib/menus/Bulalo Special.jpg';
+    if (clean.contains('fish')) return 'lib/menus/Fish and Chips.jpg';
+    if (clean.contains('nachos')) return 'lib/menus/Nachos Supreme.jpg';
+    if (clean.contains('sprite')) return 'lib/menus/Sprite (330ml).jpg';
+    if (clean.contains('tea')) return 'lib/menus/Iced Tea (Glass).jpg';
+    if (clean.contains('sizzling chicken')) return 'lib/menus/Sizzling Chicken.jpg';
+    if (clean.contains('carbonara') || clean.contains('carbonarra')) return 'lib/menus/Creamy Carbonarra.jpg';
+    if (clean.contains('halo')) return 'lib/menus/Halo-Halo Special.jpg';
+    if (clean.contains('hawaiian')) return 'lib/menus/Hawaiian Overload.jpg';
+    if (clean.contains('kare')) return 'lib/menus/Kare-Kare (Labot).jpg';
+    if (clean.contains('kimchi')) return 'lib/menus/Kimchi Fried Rice.jpg';
+    if (clean.contains('mango') || clean.contains('panna cotta')) return 'lib/menus/Mango Panna Cotta.jpg';
+    if (clean.contains('pepperoni')) return 'lib/menus/Pepperoni Classic.jpg';
+    if (clean.contains('plain rice') || clean.contains('rice')) return 'lib/menus/Plain Rice (Solo).jpg';
+    if (clean.contains('sinigang')) return 'lib/menus/Sinigang na Baboy.jpg';
+    if (clean.contains('honey') || clean.contains('garlic wings')) return 'lib/menus/Honey Garlic Wings.jpg';
+    if (clean.contains('tuna')) return 'lib/menus/Tuna Melt Sandwich.jpg';
+    if (clean.contains('sisig')) return 'lib/menus/Sizzling Pork Sisig.jpg';
+    if (clean.contains('supreme pizza') || clean.contains('pizza')) return 'lib/menus/Super Supreme Pizza.jpg';
+    if (clean.contains('ham')) return 'lib/menus/Ham and Cheese Sandwich.jpg';
+    if (clean.contains('spaghetti')) return 'lib/menus/Filipino Style Spaghetti.jpg';
+    if (clean.contains('clubhouse') || clean.contains('sandwich')) return 'lib/menus/Clubhouse Sandwich with Fries.jpg';
+    return 'lib/menus/Pancit Bihon.jpg';
+  }
+
   static final Map<int, String> hardcodedImageUrls = {
-    1: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c',
-    2: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841',
-    3: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38',
-    4: 'https://images.unsplash.com/photo-1552611052-33e04de081de',
-    5: 'https://images.unsplash.com/photo-1621996346565-e3d5d6281222',
-    6: 'https://images.unsplash.com/photo-1633964913295-ceb43826e7c9',
-    7: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6',
-    8: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af',
-    9: 'https://images.unsplash.com/photo-1550547660-d9450f859349',
-    10: 'https://images.unsplash.com/photo-1539252554453-80ab65ce3586',
-    11: 'https://images.unsplash.com/photo-1567620832903-9fc6debc209f',
-    12: 'https://images.unsplash.com/photo-1608039829572-78524f79c4c7',
-    13: 'https://images.unsplash.com/photo-1527477396000-e27163b481c2',
-    14: 'https://images.unsplash.com/photo-1540420773420-3366772f4999',
-    15: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd',
+    1: 'lib/menus/Pancit Bihon.jpg',
+    2: 'lib/menus/Mike Bihon.jpg',
+    3: 'lib/menus/Pansit Canton.jpg',
+    4: 'lib/menus/Pancit Bihon.jpg',
+    5: 'lib/menus/Filipino Style Spaghetti.jpg',
+    6: 'lib/menus/Creamy Carbonarra.jpg',
+    7: 'lib/menus/Baked Macaroni.jpg',
+    8: 'lib/menus/Clubhouse Sandwich with Fries.jpg',
+    9: 'lib/menus/Ham and Cheese Sandwich.jpg',
+    10: 'lib/menus/Tuna Melt Sandwich.jpg',
+    11: 'lib/menus/Plain Wings.jpg',
+    12: 'lib/menus/Buffalo Wings.jpg',
+    13: 'lib/menus/Honey Garlic Wings.jpg',
+    14: 'lib/menus/Caesar Salad.jpg',
+    15: 'lib/menus/Chopsuey.jpg',
+    16: 'lib/menus/Pinakbet.jpg',
+    17: 'lib/menus/Kare-Kare (Labot).jpg',
+    18: 'lib/menus/Bulalo Special.jpg',
+    19: 'lib/menus/Sinigang na Baboy.jpg',
+    20: 'lib/menus/Sizzling Chicken.jpg',
+    21: 'lib/menus/Sizzling Pork Sisig.jpg',
+    22: 'lib/menus/Sizzling Tofu.jpg',
+    23: 'lib/menus/French Fries.jpg',
+    24: 'lib/menus/Nachos Supreme.jpg',
+    25: 'lib/menus/Fish and Chips.jpg',
+    26: 'lib/menus/Tapsilog.jpg',
+    27: 'lib/menus/Porksilog.jpg',
+    28: 'lib/menus/Chickensilog.jpg',
+    29: 'lib/menus/Bangusilog.jpg',
+    30: 'lib/menus/Super Supreme Pizza.jpg',
+    31: 'lib/menus/Hawaiian Overload.jpg',
+    32: 'lib/menus/Pepperoni Classic.jpg',
+    33: 'lib/menus/Bottled Water.jpg',
+    34: 'lib/menus/Iced Tea (Glass).jpg',
+    35: 'lib/menus/Blue Lemonade.jpg',
+    36: 'lib/menus/Coke Regular.jpg',
+    37: 'lib/menus/Sprite (330ml).jpg',
+    38: 'lib/menus/Plain Rice (Solo).jpg',
+    39: 'lib/menus/Garlic Rice.jpg',
+    40: 'lib/menus/Java Rice.jpg',
+    41: 'lib/menus/Halo-Halo Special.jpg',
+    42: 'lib/menus/Leche Flan.jpg',
+    43: 'lib/menus/Mango Panna Cotta.jpg',
+    44: 'lib/menus/Bibimbap.jpg',
+    45: 'lib/menus/Kimchi Fried Rice.jpg',
+    46: 'lib/menus/Tteokbokki.jpg',
+    47: 'lib/menus/Ramen with Cheese.jpg',
+
   };
 
   FoodItem({
@@ -49,19 +128,21 @@ class FoodItem {
     required this.categoryId,
     this.isAvailable = true,
     String? imageUrl,
-  }) : imageUrl = imageUrl ?? hardcodedImageUrls[itemDbId] ?? 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624';
+  }) : imageUrl = imageUrl ?? hardcodedImageUrls[itemDbId] ?? getLocalMenuImage(name);
 
   factory FoodItem.fromJson(Map<String, dynamic> json) {
     final int id = json['id'] ?? 0;
-    String safeImg = hardcodedImageUrls[id] ?? 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624';
+    final String name = json['name'] ?? 'Delicious Dish';
+    final String? dbImg = json['image_url'];
+    final String fallbackImg = hardcodedImageUrls[id] ?? getLocalMenuImage(name);
 
     return FoodItem(
       itemDbId: id,
-      name: json['name'] ?? 'Delicious Dish',
+      name: name,
       price: double.tryParse(json['price']?.toString() ?? '0.0') ?? 0.0,
       categoryId: json['category_id'] ?? 1,
       isAvailable: json['is_available'] ?? true,
-      imageUrl: safeImg,
+      imageUrl: (dbImg != null && dbImg.isNotEmpty && !dbImg.startsWith('http')) ? dbImg : fallbackImg,
     );
   }
 }
@@ -105,6 +186,18 @@ class _MenuScreenState extends State<MenuScreen> {
   final TextEditingController _searchController = TextEditingController();
 
   String get _baseUrl => ApiConfig.baseUrl;
+
+  /// Normalizes the backend URL into a socket.io compatible endpoint
+  /// (ws:// / wss://) para sa secure cloud deployments (hal. HTTPS sa Render).
+  String get _socketUrl {
+    var url = _baseUrl;
+    if (url.startsWith('https://')) {
+      url = 'wss://${url.substring('https://'.length)}';
+    } else if (url.startsWith('http://')) {
+      url = 'ws://${url.substring('http://'.length)}';
+    }
+    return url;
+  }
 
   int? _chosenTableNumber;
   bool _isTakeoutSelected = false;
@@ -159,7 +252,7 @@ class _MenuScreenState extends State<MenuScreen> {
   void _connectMenuSocket() {
     try {
       _menuSocket = io.io(
-        _baseUrl,
+        _socketUrl,
         io.OptionBuilder()
             .setTransports(['websocket', 'polling'])
             .enableAutoConnect()
@@ -182,6 +275,7 @@ class _MenuScreenState extends State<MenuScreen> {
       _menuSocket.on('session_cancelled', _handleTableOrderFinished);
       _menuSocket.on('order_status_updated', _handleTableOrderEvent);
       _menuSocket.on('order_updated', _handleTableOrderEvent);
+      _menuSocket.on('stock_updated', (_) => _fetchLiveDatabaseMenu());
       _menuSocket.connect();
     } catch (_) {}
   }
@@ -196,54 +290,181 @@ class _MenuScreenState extends State<MenuScreen> {
     final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
     final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? payload['table_id']?.toString() ?? '');
 
+    // Strict Scoping: Ignore if eventTableId exists but doesn't match
     if (eventTableId != null && eventTableId != currentTable) {
       return;
     }
-
-    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
+    
+    // Strict Scoping: If there's no eventTableId at all, try checking session_id
+    final int? eventSessionId = int.tryParse(orderPayload['session_id']?.toString() ?? payload['session_id']?.toString() ?? '');
+    if (eventTableId == null) {
+       final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+       if (eventSessionId != null && currentSessionId != null && eventSessionId != currentSessionId) {
+         return;
+       }
+    }
+    
     final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
-    final dynamic currentOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
-
-    if (eventOrderId != null && currentOrderId != null) {
-      if (!SocketService.isSameOrder(eventOrderId, currentOrderId)) {
-        return;
-      }
+    if (eventTableId == null && eventSessionId == null && eventOrderId == null) {
+       return;
     }
 
-    final String orderCode = orderPayload['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}';
+    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
+    final String orderCode = eventOrderId != null ? UserSession.formatOrderCode(eventOrderId) : (orderPayload['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}');
 
+    // 1. GLOBAL NOTIFICATIONS (Maaabutan agad siya basta tama ang table id)
     if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
       AudioNotificationService.showAggressiveBanner(
         context: context,
         title: "$orderCode: Payment Completed",
-        message: "Your order session has been settled.",
+        message: "Your table session receipt has been settled.",
         backgroundColor: const Color(0xFF10B981),
         icon: Icons.check_circle,
       );
-      _handleTableOrderFinished(payload);
     } else if (status == 'DECLINED' || status == 'REJECTED') {
       final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
       AudioNotificationService.showAggressiveBanner(
         context: context,
         title: "$orderCode: Order Status: DECLINED",
-        message: "Reason: $reason",
+        message: "Reason: ${reason.isNotEmpty ? reason : "Please check with staff for details."}",
         backgroundColor: const Color(0xFFEF4444),
         icon: Icons.cancel,
       );
-    } else if (status == 'PREPARING' || status == 'READY' || status == 'SERVED') {
+    } else if (status == 'PREPARING') {
       AudioNotificationService.showAggressiveBanner(
         context: context,
-        title: "Order Status: $status",
-        message: "Tap 'Live Status' or view tracking for details.",
-        backgroundColor: const Color(0xFF203F35),
-        icon: Icons.restaurant_menu,
+        title: "$orderCode: Order Status: PREPARING",
+        message: "The kitchen is now preparing your delicious meal.",
+        backgroundColor: const Color(0xFFD7BC86),
+        icon: Icons.kitchen,
       );
+    } else if (status == 'READY' || status == 'SERVED') {
+      AudioNotificationService.showAggressiveBanner(
+        context: context,
+        title: status == 'SERVED' ? "$orderCode: Order Status: SERVED" : "$orderCode: Order Status: READY",
+        message: status == 'SERVED' ? "Your order is hot and ready for your table." : "Your order is ready for pickup / service.",
+        backgroundColor: const Color(0xFF22C55E),
+        icon: Icons.restaurant,
+      );
+    }
+
+    // 2. ISOLATE INTERNAL UI POP-UP STATE
+    // Inalis na natin ang mahigpit na pagharang (blocking) dahil minsan ay null ang UserSession variables
+    // habang nag-scroll ang user sa menu na nagreresulta sa hindi paglabas ng Pop-up!
+    // Hahayaan na natin itong dumiretso sa pop-up checking basta ang event table id ay tugma (nagawa na sa itaas).
+    final dynamic currentTrackedOrderId = (widget.isAdditionalOrder || UserSession.isAdditionalOrder)
+        ? UserSession.targetParentOrderId 
+        : (UserSession.lastPlacedOrderId ?? UserSession.firstOrderId);
+
+    if (currentTrackedOrderId != null && eventOrderId != null) {
+      if (!SocketService.isSameOrder(eventOrderId, currentTrackedOrderId)) {
+        return; // Iblock lamang kung talagang SURE tayo na ibang ticket ang tinitignan niya
+      }
+    }
+
+    // 3. SHOW POP-UP DIALOG KUNG "SAME TICKET"
+    // Hihintayin nating sigurado ang delay bago natin i-redirect ang user para
+    // sigurado ang sync sa server side pagbalik nila.
+    if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _handleTableOrderFinished(payload);
+      });
+    } else if (status == 'DECLINED' || status == 'REJECTED') {
+      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _showOrderDeclinedDialog(orderCode, reason);
+      });
     }
   }
 
-  void _handleTableOrderFinished(dynamic data) {
+  bool _declineDialogShown = false;
+
+  void _showOrderDeclinedDialog(String orderCode, String reason) {
+    if (_declineDialogShown || !mounted) return;
+    _declineDialogShown = true;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Order Declined', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444))),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Pasensya na po, ang inyong order ($orderCode) ay na-decline ng kitchen/admin.',
+              style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEE2E2),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFCA5A5)),
+              ),
+              child: Text(
+                'Reason: ${reason.isNotEmpty ? reason : "Item Out of Stock"}',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B3B2B)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _declineDialogShown = false;
+              // Babalik lamang sa choices
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => OrderTypeSelectionScreen(
+                    tableId: _chosenTableNumber ?? 7,
+                    tableNumber: _chosenTableNumber ?? 7,
+                  ),
+                ),
+                (route) => false,
+              );
+            },
+            child: const Text('Acknowledge / Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleTableOrderFinished(dynamic eventPayloadData) {
     if (!mounted) return;
-    final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+    
+    // Strict Scoping check before showing finished dialog
+    if (eventPayloadData != null) {
+      final Map<String, dynamic> data = eventPayloadData is Map<String, dynamic>
+          ? eventPayloadData
+          : (eventPayloadData is Map ? Map<String, dynamic>.from(eventPayloadData) : {});
+      final Map<String, dynamic> orderPayload = data['order'] is Map ? Map<String, dynamic>.from(data['order']) : data;
+
+      final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+      final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? data['table_id']?.toString() ?? '');
+      final dynamic eventSessionId = orderPayload['session_id'] ?? data['session_id'];
+
+      if (eventTableId != null && eventTableId != currentTable) {
+        return; // Ignore events for other tables
+      }
+      
+      if (eventTableId == null && eventSessionId != null) {
+        final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+        if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
+          return; // Ignore events for other sessions
+        }
+      }
+    }
+    
     if (_dialogShown) return;
     _dialogShown = true;
 
@@ -265,8 +486,8 @@ class _MenuScreenState extends State<MenuScreen> {
                 context,
                 MaterialPageRoute(
                   builder: (context) => OrderTypeSelectionScreen(
-                    tableId: currentTable,
-                    tableNumber: currentTable,
+                    tableId: _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7,
+                    tableNumber: _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7,
                   ),
                 ),
                 (route) => false,
@@ -483,21 +704,6 @@ class _MenuScreenState extends State<MenuScreen> {
           ),
           Row(
             children: [
-              IconButton(
-                icon: const Icon(Icons.qr_code_scanner, color: Color(0xFF203F35), size: 22),
-                tooltip: 'Scan Table QR',
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const QrScannerScreen())),
-              ),
-              IconButton(
-                icon: const Icon(Icons.point_of_sale_outlined, color: Color(0xFF203F35), size: 22),
-                tooltip: 'Cashier Station',
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const OrdersScreen(cartItems: []))),
-              ),
-              IconButton(
-                icon: const Icon(Icons.admin_panel_settings_outlined, color: Color(0xFF203F35), size: 22),
-                tooltip: 'Admin Dashboard',
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminDashboardScreen())),
-              ),
               InkWell(
                 onTap: () => AudioNotificationService.showNotificationHistory(context),
                 borderRadius: BorderRadius.circular(22),
@@ -652,6 +858,40 @@ class _MenuScreenState extends State<MenuScreen> {
         final foodItem = items[index];
         final productCount = _orderCart[foodItem] ?? 0;
 
+        final String? imgUrl = foodItem.imageUrl;
+        Widget imageWidget;
+        if (imgUrl != null && imgUrl.startsWith('lib/menus/')) {
+          imageWidget = Image.asset(
+            imgUrl,
+            width: double.infinity,
+            height: 120,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => Container(
+              height: 120,
+              color: const Color(0xFFEEE7D9),
+              child: const Icon(Icons.restaurant, color: Color(0xFF203F35), size: 32),
+            ),
+          );
+        } else if (imgUrl != null && imgUrl.startsWith('http')) {
+          imageWidget = Image.network(
+            imgUrl,
+            width: double.infinity,
+            height: 120,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => Container(
+              height: 120,
+              color: const Color(0xFFEEE7D9),
+              child: const Icon(Icons.restaurant, color: Color(0xFF203F35), size: 32),
+            ),
+          );
+        } else {
+          imageWidget = Container(
+            height: 120,
+            color: const Color(0xFFEEE7D9),
+            child: const Icon(Icons.restaurant, color: Color(0xFF203F35), size: 32),
+          );
+        }
+
         return InkWell(
           onTap: () {
             Navigator.push(
@@ -676,6 +916,10 @@ class _MenuScreenState extends State<MenuScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(17)),
+                  child: imageWidget,
+                ),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(12.0),
@@ -736,8 +980,8 @@ class _MenuScreenState extends State<MenuScreen> {
               height: 48,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                onPressed: () {
-                  Navigator.push(
+                onPressed: () async {
+                  final updatedCart = await Navigator.push<Map<FoodItem, int>>(
                     context,
                     MaterialPageRoute(
                       builder: (context) => ShoppingCartScreen(
@@ -749,6 +993,13 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     ),
                   );
+
+                  if (updatedCart != null && mounted) {
+                    setState(() {
+                      _orderCart.clear();
+                      _orderCart.addAll(updatedCart);
+                    });
+                  }
                 },
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,

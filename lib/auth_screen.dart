@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'config/api_config.dart';
 
 class AuthScreen extends StatefulWidget {
   final Function(String, String) onLoginSuccess;
@@ -15,6 +16,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  String get _baseUrl => ApiConfig.baseUrl;
 
   Future<void> _submitAuth() async {
     if (_formKey.currentState!.validate()) {
@@ -25,7 +27,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
       try {
         final response = await http.post(
-          Uri.parse('http://localhost:5000/api/v1/auth/login'),
+          Uri.parse('$_baseUrl/api/v1/auth/login'),
           headers: {"Content-Type": "application/json"},
           body: jsonEncode({"username": username, "password": password}),
         );

@@ -1,4 +1,4 @@
-package com.example.balai_silayan
+package com.balaisilayan.restaurant
 
 import io.flutter.embedding.android.FlutterActivity
 

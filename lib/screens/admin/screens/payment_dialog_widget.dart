@@ -84,14 +84,15 @@ class _PaymentDialogState extends State<PaymentDialog> {
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               initialValue: selectedDiscount,
+              style: const TextStyle(color: Color(0xFF203F35), fontSize: 14),
               decoration: InputDecoration(
                 labelText: 'Discount Type',
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
               ),
               items: const [
-                DropdownMenuItem(value: 'NONE', child: Text('No Discount')),
-                DropdownMenuItem(value: 'SENIOR_CITIZEN', child: Text('Senior Citizen')),
-                DropdownMenuItem(value: 'PWD', child: Text('PWD')),
+                DropdownMenuItem(value: 'NONE', child: Text('No Discount', style: TextStyle(color: Color(0xFF203F35)))),
+                DropdownMenuItem(value: 'SENIOR_CITIZEN', child: Text('Senior Citizen', style: TextStyle(color: Color(0xFF203F35)))),
+                DropdownMenuItem(value: 'PWD', child: Text('PWD', style: TextStyle(color: Color(0xFF203F35)))),
               ],
               onChanged: (val) => setState(() => selectedDiscount = val ?? 'NONE'),
             ),
@@ -103,6 +104,7 @@ class _PaymentDialogState extends State<PaymentDialog> {
                     child: TextField(
                       controller: partySizeController,
                       keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Color(0xFF203F35), fontSize: 14),
                       decoration: InputDecoration(
                         labelText: 'Total Party Size',
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
@@ -115,6 +117,7 @@ class _PaymentDialogState extends State<PaymentDialog> {
                     child: TextField(
                       controller: pwdCountController,
                       keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Color(0xFF203F35), fontSize: 14),
                       decoration: InputDecoration(
                         labelText: 'PWD/Senior Count',
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
@@ -127,6 +130,7 @@ class _PaymentDialogState extends State<PaymentDialog> {
               const SizedBox(height: 10),
               TextField(
                 controller: customerNameController,
+                style: const TextStyle(color: Color(0xFF203F35), fontSize: 14),
                 decoration: InputDecoration(
                   labelText: 'Customer Name',
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
@@ -135,6 +139,7 @@ class _PaymentDialogState extends State<PaymentDialog> {
               const SizedBox(height: 10),
               TextField(
                 controller: idNumberController,
+                style: const TextStyle(color: Color(0xFF203F35), fontSize: 14),
                 decoration: InputDecoration(
                   labelText: 'ID Number',
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
@@ -145,6 +150,7 @@ class _PaymentDialogState extends State<PaymentDialog> {
             TextField(
               controller: amountPaidController,
               keyboardType: TextInputType.number,
+              style: const TextStyle(color: Color(0xFF203F35), fontSize: 14),
               decoration: InputDecoration(
                 labelText: 'Amount Paid (₱)',
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),

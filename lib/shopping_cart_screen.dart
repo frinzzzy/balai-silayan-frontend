@@ -450,7 +450,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           InkWell(
-            onTap: () => Navigator.pop(context),
+            onTap: () => Navigator.pop(context, _editableCart),
             borderRadius: BorderRadius.circular(22),
             child: Container(
               width: 44,
@@ -614,6 +614,45 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     );
   }
 
+  Widget _buildCartItemImageWidget(FoodItem item) {
+    final String? imgUrl = item.imageUrl;
+    if (imgUrl != null && imgUrl.startsWith('lib/menus/')) {
+      return Image.asset(
+        imgUrl,
+        width: 74,
+        height: 74,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _buildCartFallbackAvatar(item),
+      );
+    }
+    if (imgUrl != null && imgUrl.startsWith('http')) {
+      return Image.network(
+        imgUrl,
+        width: 74,
+        height: 74,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _buildCartFallbackAvatar(item),
+      );
+    }
+    return _buildCartFallbackAvatar(item);
+  }
+
+  Widget _buildCartFallbackAvatar(FoodItem item) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.restaurant_outlined, size: 24, color: Color(0xFF203F35)),
+          const SizedBox(height: 2),
+          Text(
+            item.name.isNotEmpty ? item.name.substring(0, 1) : 'D',
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFFA47C3D)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCartItemCard(FoodItem item, int quantity) {
     final double itemTotal = item.price * quantity;
 
@@ -644,18 +683,9 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                   color: const Color(0xFFEEE7D9),
                   borderRadius: BorderRadius.circular(18),
                 ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.restaurant_outlined, size: 24, color: Color(0xFF203F35)),
-                      const SizedBox(height: 2),
-                      Text(
-                        item.name.substring(0, 1),
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFFA47C3D)),
-                      ),
-                    ],
-                  ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: _buildCartItemImageWidget(item),
                 ),
               ),
               const SizedBox(width: 14),
@@ -866,8 +896,8 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               elevation: 0,
             ),
-            onPressed: () {
-              Navigator.push(
+            onPressed: () async {
+              final checkoutResult = await Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) => CheckoutScreen(
@@ -879,6 +909,17 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                   ),
                 ),
               );
+
+              if (checkoutResult != null && mounted) {
+                if (checkoutResult == 'ORDER_PLACED') {
+                  Navigator.pop(context, <FoodItem, int>{});
+                } else if (checkoutResult is Map<FoodItem, int>) {
+                  setState(() {
+                    _editableCart = Map.from(checkoutResult);
+                    _recalculateTotal();
+                  });
+                }
+              }
             },
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -903,7 +944,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
               side: const BorderSide(color: Color(0xFFE5DFD3)),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(context, _editableCart),
             child: const Text(
               'Add more dishes',
               style: TextStyle(color: Color(0xFF203F35), fontWeight: FontWeight.bold, fontSize: 14),

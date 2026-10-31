@@ -4,8 +4,17 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+import java.util.Properties
+import java.io.FileInputStream
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 android {
-    namespace = "com.example.balai_silayan"
+    namespace = "com.balaisilayan.restaurant"
     compileSdk = flutter.compileSdkVersion
 
     compileOptions {
@@ -19,8 +28,18 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            keyAlias = keystoreProperties["keyAlias"] as String?
+            keyPassword = keystoreProperties["keyPassword"] as String?
+            storeFile = keystoreProperties["storeFile"]?.let { rootProject.file(it) }
+            storePassword = keystoreProperties["storePassword"] as String?
+        }
+    }
+
     defaultConfig {
-        applicationId = "com.example.balai_silayan"
+        applicationId = "com.balaisilayan.restaurant"
+        ndkVersion = "28.2.13676358"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode.toInt()
@@ -29,7 +48,14 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            ndk {
+                debugSymbolLevel = "NONE"
+            }
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

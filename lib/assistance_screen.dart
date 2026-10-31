@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'menu_screen.dart';
 import 'order_status_screen.dart';
 import 'user_session.dart';
+import 'config/api_config.dart';
 
 class AssistanceScreen extends StatefulWidget {
   final int? tableId;
@@ -24,6 +25,7 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
   final Set<String> _selectedCategories = {"Water"};
   bool _isSubmitting = false;
   List<Map<String, dynamic>> _activeRequests = [];
+  String get _baseUrl => ApiConfig.baseUrl;
 
   final List<String> _assistanceOptions = [
     "Water",
@@ -40,7 +42,7 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
 
   Future<void> _fetchLiveAssistanceRequests() async {
     try {
-      final response = await http.get(Uri.parse('http://localhost:5000/api/v1/assistance'));
+      final response = await http.get(Uri.parse('$_baseUrl/api/v1/assistance'));
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
         final List<dynamic> dataList = resData['data'] ?? [];
@@ -83,7 +85,7 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('http://localhost:5000/api/v1/assistance'),
+        Uri.parse('$_baseUrl/api/v1/assistance'),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode(payload),
       );

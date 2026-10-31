@@ -6,6 +6,7 @@ class AdminOrder {
   String status; // PENDING, PREPARING, SERVED, PAID, REJECTED
   String paymentMethod; // UNPAID, CASH, GCASH
   String updatedAt;
+  final DateTime? billRequestedAt;
 
   AdminOrder({
     required this.id,
@@ -15,6 +16,7 @@ class AdminOrder {
     required this.status,
     required this.paymentMethod,
     required this.updatedAt,
+    this.billRequestedAt,
   });
 
   factory AdminOrder.fromJson(Map<String, dynamic> json) {
@@ -26,6 +28,7 @@ class AdminOrder {
       status: (json['order_status'] ?? json['status'] ?? 'PENDING').toString().toUpperCase(),
       paymentMethod: (json['payment_method'] ?? 'UNPAID').toString().toUpperCase(),
       updatedAt: _formatTime(json['updated_at'] ?? json['created_at']),
+      billRequestedAt: _parseDate(json['bill_requested_at'] ?? json['bill_requested'] ?? json['requested_at'] ?? json['session_bill_requested_at']),
     );
   }
 
@@ -48,12 +51,39 @@ class AdminOrder {
     }
   }
 
+  static DateTime? _parseDate(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is DateTime) return raw;
+    return DateTime.tryParse(raw.toString());
+  }
+
   Map<String, dynamic> toJson() {
     return {
       "status": status,
       "payment_method": paymentMethod,
       "updated_at": DateTime.now().toIso8601String(),
     };
+  }
+}
+
+/// Represents a single top-selling dish based on actual paid/completed order items.
+class TopDishItem {
+  final String name;
+  final int quantity;
+  final double revenue;
+
+  TopDishItem({
+    required this.name,
+    required this.quantity,
+    required this.revenue,
+  });
+
+  factory TopDishItem.fromJson(Map<String, dynamic> json) {
+    return TopDishItem(
+      name: (json['name'] ?? json['item_name'] ?? json['menu_item_name'] ?? json['dish_name'] ?? 'Heritage Dish').toString(),
+      quantity: int.tryParse(json['quantity']?.toString() ?? json['total_quantity']?.toString() ?? json['orders']?.toString() ?? '0') ?? 0,
+      revenue: double.tryParse(json['revenue']?.toString() ?? json['total_revenue']?.toString() ?? json['sales']?.toString() ?? '0') ?? 0.0,
+    );
   }
 }
 

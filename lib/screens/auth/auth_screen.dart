@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../../admin_dashboard_screen.dart';
 import '../customer/order_type_selection_screen.dart';
+import '../../config/api_config.dart';
 
 /// Robust State-managed post-login navigation helper with role-based routing
 void handlePostLoginNavigation({
@@ -55,6 +56,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _emailController = TextEditingController(text: 'admin');
   final _passwordController = TextEditingController(text: 'admin123');
   bool _isLoading = false;
+  String get _baseUrl => ApiConfig.baseUrl;
 
   Future<void> _submitAuth() async {
     if (_formKey.currentState!.validate()) {
@@ -65,7 +67,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
       try {
         final response = await http.post(
-          Uri.parse('http://localhost:5000/api/v1/auth/login'),
+          Uri.parse('$_baseUrl/api/v1/auth/login'),
           headers: {"Content-Type": "application/json"},
           body: jsonEncode({"username": username, "password": password}),
         );

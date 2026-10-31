@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'config/api_config.dart';
 
 // Structural data schema matching table and customer reservations database columns
 class TableReservation {
@@ -68,6 +69,7 @@ class _ReservationsScreenState extends State<ReservationsScreen> with SingleTick
   late TabController _tabController;
   List<TableReservation> _reservationsRepository = [];
   List<WorkstationUnit> _workstationsRepository = [];
+  String get _baseUrl => ApiConfig.baseUrl;
   bool _isLoading = true;
 
   // Fallback production seed arrays matching database mock environments
@@ -108,7 +110,7 @@ class _ReservationsScreenState extends State<ReservationsScreen> with SingleTick
   Future<void> _synchronizeAllocationRecords() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/v1/event-reservations'),
+        Uri.parse('$_baseUrl/api/v1/event-reservations'),
       );
 
       if (response.statusCode == 200) {
@@ -139,7 +141,7 @@ class _ReservationsScreenState extends State<ReservationsScreen> with SingleTick
   Future<void> _tryFallbackReservationEndpoint() async {
     try {
       final response = await http.get(
-        Uri.parse('http://10.0.2.2:5000/api/v1/event-reservations'),
+        Uri.parse('$_baseUrl/api/v1/event-reservations'),
       );
       if (response.statusCode == 200) {
         final Map<String, dynamic> decodedData = jsonDecode(response.body);

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:image_picker/image_picker.dart';
 import 'order_type_selection_screen.dart';
@@ -100,27 +101,29 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
     }
   }
 
-  void _promptManualQrCodeEntry() {
-    final TextEditingController tokenController = TextEditingController();
+  void _promptManualTableEntry() {
+    final TextEditingController tableController = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surfaceIvory,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Enter Table Code', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primaryCrimson)),
+        title: const Text('Enter Table Number', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primaryCrimson)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              'Enter your table number or QR token below:',
+              'For Testing: Enter the table number below.',
               style: TextStyle(fontSize: 12, color: AppTheme.mutedGray),
             ),
             const SizedBox(height: 16),
             TextField(
-              controller: tokenController,
+              controller: tableController,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: Color(0xFF203F35), fontSize: 14),
               decoration: const InputDecoration(
-                hintText: 'e.g. TABLE-07 or 7',
-                labelText: 'Table Number / QR Token',
+                hintText: 'e.g. 1, 7, 15',
+                labelText: 'Table Number',
               ),
             ),
           ],
@@ -136,13 +139,13 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () {
-              final val = tokenController.text.trim();
+              final val = tableController.text.trim();
               if (val.isNotEmpty) {
                 Navigator.pop(ctx);
                 _handleScan(val);
               }
             },
-            child: const Text('Submit', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            child: const Text('Continue', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -162,29 +165,43 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
 
       setState(() => _isProcessing = true);
 
-      final BarcodeCapture? capture = await _scannerController.analyzeImage(image.path);
-      if (capture != null && capture.barcodes.isNotEmpty) {
-        final String? rawValue = capture.barcodes.first.rawValue;
-        if (rawValue != null && rawValue.isNotEmpty) {
-          _handleScan(rawValue);
-          return;
-        }
+      String? rawValue;
+
+      if (kIsWeb) {
+        // Sa Mobile Scanner 5.x pataas, hindi na ginagamit ang analyzeImageBytes
+        // Ginagamit direktang analyzeImage kasama ang image.path (Blob URL) at ang
+        // scanner engine sa ilalim ang humahawak ng browser-specific file loading.
+        try {
+          final BarcodeCapture? capture = await _scannerController.analyzeImage(image.path);
+          if (capture != null && capture.barcodes.isNotEmpty) {
+            rawValue = capture.barcodes.first.rawValue;
+          }
+        } catch (_) {}
+      } else {
+        // Para sa Android/iOS: Gamitin din ang file path
+        try {
+          final BarcodeCapture? capture = await _scannerController.analyzeImage(image.path);
+          if (capture != null && capture.barcodes.isNotEmpty) {
+            rawValue = capture.barcodes.first.rawValue;
+          }
+        } catch (_) {}
       }
 
-      if (mounted) {
-        setState(() => _isProcessing = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No QR code found in selected photo. Please select another image or enter table number.'),
-            backgroundColor: AppTheme.errorRust,
-          ),
-        );
-        _promptManualQrCodeEntry();
+      if (rawValue != null && rawValue.isNotEmpty) {
+        await _handleScan(rawValue);
+        return;
       }
-    } catch (_) {
+
+      // ⚠️ TESTING FALLBACK: Kapag nag-fail ang pag-read sa kahit anong picture,
+      // ipapakita ang manual table entry na gusto mo para sa testing.
       if (mounted) {
         setState(() => _isProcessing = false);
-        _promptManualQrCodeEntry();
+        _promptManualTableEntry();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+        _promptManualTableEntry();
       }
     }
   }
@@ -253,7 +270,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(width: 44), // Balancer
+                  const SizedBox(width: 44),
                 ],
               ),
             ),

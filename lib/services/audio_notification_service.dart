@@ -24,6 +24,10 @@ class NotificationRecord {
 class AudioNotificationService {
   static final AudioPlayer _audioPlayer = AudioPlayer();
   static final List<NotificationRecord> history = [];
+  
+  // Deduplication lock variables
+  static String _lastBannerSignature = "";
+  static DateTime _lastBannerTimestamp = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Play sound chime and trigger built-in haptic vibration
   static Future<void> playStatusAlertSound() async {
@@ -56,6 +60,19 @@ class AudioNotificationService {
     required Color backgroundColor,
     IconData icon = Icons.notifications_active,
   }) {
+    final String currentSignature = "$title|$message";
+    final DateTime now = DateTime.now();
+
+    // DEDUPLICATION LOCK: Prevent multiple active socket listeners from
+    // triggering the exact same banner within 1000 milliseconds.
+    if (_lastBannerSignature == currentSignature &&
+        now.difference(_lastBannerTimestamp).inMilliseconds < 1000) {
+      return; // Silently ignore duplicate request
+    }
+    
+    _lastBannerSignature = currentSignature;
+    _lastBannerTimestamp = now;
+
     // I-play ang alert sound sa background na hindi nahaharang ng banner flow.
     // Kapag walang audio asset o mag-fail ang playback, hindi ito dapat
     // hinaharang sa pagpapakita ng SnackBar notification.
@@ -65,7 +82,7 @@ class AudioNotificationService {
       NotificationRecord(
         title: title,
         message: message,
-        timestamp: DateTime.now(),
+        timestamp: now,
         backgroundColor: backgroundColor,
         icon: icon,
       ),

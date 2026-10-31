@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/admin_order_model.dart';
 import '../services/admin_service.dart';
+import '../../../config/api_config.dart';
 import 'receipt_ticket_dialog.dart';
 import 'payment_dialog_widget.dart';
 
@@ -156,7 +157,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             final String? authToken = AdminService.staffAuthToken;
 
             final response = await http.post(
-              Uri.parse('http://localhost:5000/api/v1/orders/${order.id}/pay'),
+              Uri.parse('${ApiConfig.baseUrl}/api/v1/orders/${order.id}/pay'),
               headers: {
                 'Content-Type': 'application/json',
                 if (authToken != null) 'Authorization': 'Bearer $authToken',
@@ -201,6 +202,32 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
     );
   }
 
+  void _showConfirmationDialog(BuildContext context, String title, String message, VoidCallback onConfirm) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        content: Text(message, style: const TextStyle(fontSize: 13, color: Color(0xFF4A5568))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF788078))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              onConfirm();
+            },
+            child: const Text('Confirm', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     List<AdminOrder> activeOrders = widget.orders.where((o) {
@@ -235,7 +262,9 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
 
     return Container(
       color: const Color(0xFFF8F4EC),
-      child: RefreshIndicator(
+      child: Stack(
+        children: [
+          RefreshIndicator(
         color: const Color(0xFF203F35),
         onRefresh: () async => widget.onRefresh(),
         child: ListView(
@@ -305,6 +334,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                   Expanded(
                     child: TextField(
                       onChanged: (val) => setState(() => _searchQuery = val),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF203F35)),
                       decoration: const InputDecoration(
                         hintText: 'Search code, table or dish',
                         hintStyle: TextStyle(fontSize: 13, color: Color(0xFF687368)),
@@ -362,17 +392,19 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                       child: DropdownButton<int?>(
                         value: _selectedTableFilter,
                         isExpanded: true,
+                        style: const TextStyle(fontSize: 13, color: Color(0xFF203F35)),
+                        dropdownColor: const Color(0xFFFFFDFA),
                         hint: const Text('All tables', style: TextStyle(fontSize: 13, color: Color(0xFF203F35), fontWeight: FontWeight.w600)),
                         items: [
                           const DropdownMenuItem<int?>(
                             value: null,
-                            child: Text('All tables', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                            child: Text('All tables', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
                           ),
                           ...List.generate(15, (index) {
                             final tableNum = index + 1;
                             return DropdownMenuItem<int?>(
                               value: tableNum,
-                              child: Text('Table ${tableNum.toString().padLeft(2, '0')}', style: const TextStyle(fontSize: 13)),
+                              child: Text('Table ${tableNum.toString().padLeft(2, '0')}', style: const TextStyle(fontSize: 13, color: Color(0xFF203F35))),
                             );
                           }),
                         ],
@@ -445,6 +477,47 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             const SizedBox(height: 20),
           ],
         ),
+          ),
+          // TEMP DISABLED (Bill Request feature on hold)
+          // Positioned(
+          //   left: 16,
+          //   right: 16,
+          //   bottom: 16,
+          //   child: Material(
+          //     color: const Color(0xFF8A6D3B),
+          //     borderRadius: BorderRadius.circular(14),
+          //     child: InkWell(
+          //       onTap: () => setState(() => _selectedStatusFilter = 'Bill Requested'),
+          //       borderRadius: BorderRadius.circular(14),
+          //       child: Container(
+          //         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          //         child: Row(
+          //           children: [
+          //             const Icon(Icons.receipt_long, color: Colors.white, size: 22),
+          //             const SizedBox(width: 12),
+          //             Expanded(
+          //               child: Column(
+          //                 crossAxisAlignment: CrossAxisAlignment.start,
+          //                 children: [
+          //                   Text(
+          //                     'BILL REQUESTED • ${billRequestedOrders.length}',
+          //                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+          //                   ),
+          //                   Text(
+          //                     'Tables waiting for bill settlement / payment',
+          //                     style: const TextStyle(color: Colors.white70, fontSize: 11),
+          //                   ),
+          //                 ],
+          //               ),
+          //             ),
+          //             const Icon(Icons.arrow_forward, color: Colors.white, size: 18),
+          //           ],
+          //         ),
+          //       ),
+          //     ),
+          //   ),
+          // ),
+        ],
       ),
     );
   }
@@ -478,6 +551,29 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // TEMP DISABLED (Bill Request feature on hold)
+          // if (isBillRequested) ...[
+          //   Container(
+          //     width: double.infinity,
+          //     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          //     margin: const EdgeInsets.only(bottom: 10),
+          //     decoration: BoxDecoration(
+          //       color: const Color(0xFFF5EBD7),
+          //       borderRadius: BorderRadius.circular(6),
+          //       border: Border.all(color: const Color(0xFFA47C3D)),
+          //     ),
+          //     child: const Row(
+          //       children: [
+          //         Icon(Icons.receipt_long, size: 14, color: Color(0xFF846228)),
+          //         SizedBox(width: 6),
+          //         Text(
+          //           '🧾 BILL REQUESTED BY CUSTOMER',
+          //           style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF846228), letterSpacing: 0.8),
+          //         ),
+          //       ],
+          //     ),
+          //   ),
+          // ],
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -494,7 +590,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFC3AA7F).withOpacity(0.2),
+                    color: const Color(0xFFC3AA7F).withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
@@ -525,6 +621,35 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
               ),
             ],
           ),
+          // TEMP DISABLED (Bill Request feature on hold)
+          // if (order.billRequestedAt != null) ...[
+          //   const SizedBox(height: 10),
+          //   Container(
+          //     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          //     decoration: BoxDecoration(
+          //       color: const Color(0xFFF7E8CE),
+          //       borderRadius: BorderRadius.circular(10),
+          //       border: Border.all(color: const Color(0xFFC3AA7F)),
+          //     ),
+          //     child: Row(
+          //       children: [
+          //         const Icon(Icons.receipt_long, size: 16, color: Color(0xFF8A6D3B)),
+          //         const SizedBox(width: 8),
+          //         const Expanded(
+          //           child: Text(
+          //             'BILL REQUESTED • Awaiting bill settlement / payment',
+          //             style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8A6D3B)),
+          //           ),
+          //         ),
+          //         const SizedBox(width: 8),
+          //         Text(
+          //           '₱${order.totalAmount.toStringAsFixed(2)}',
+          //           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF203F35)),
+          //         ),
+          //       ],
+          //     ),
+          //   ),
+          // ],
           const SizedBox(height: 4),
           Text(
             'Table ${order.tableNumber.toString().padLeft(2, '0')} • Dine-in',
@@ -588,7 +713,12 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
-              onPressed: () => widget.onActionTriggered(order.id, 'PREPARING'),
+              onPressed: () => _showConfirmationDialog(
+                context,
+                'Accept Order #${order.id}?',
+                'Are you sure you want to accept and start preparing this order for Table #${order.tableNumber}?',
+                () => widget.onActionTriggered(order.id, 'PREPARING'),
+              ),
               child: const Text('Review & accept', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
             ),
           ),
@@ -605,7 +735,12 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
-          onPressed: () => widget.onActionTriggered(order.id, 'SERVED'),
+          onPressed: () => _showConfirmationDialog(
+            context,
+            'Mark Order #${order.id} as Served?',
+            'Confirm that this order has been served to Table #${order.tableNumber}?',
+            () => widget.onActionTriggered(order.id, 'SERVED'),
+          ),
           child: const Text('Mark as Served', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
         ),
       );

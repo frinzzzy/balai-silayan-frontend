@@ -60,7 +60,7 @@ class AdminService {
   }
 
   /// GET /api/v1/reports/daily-sales
-  Future<DailySalesStats> fetchDailySalesAnalytics({bool isApiConnected = false}) async {
+  Future<DailySalesStats> fetchDailySalesAnalytics({bool isApiConnected = false, String period = 'today', String? startDate, String? endDate}) async {
     if (!isApiConnected) {
       await Future.delayed(const Duration(milliseconds: 200));
       return DailySalesStats(
@@ -72,8 +72,12 @@ class AdminService {
     }
 
     try {
+      String url = '$_baseUrl/api/v1/reports/daily-sales?period=$period';
+      if (startDate != null && endDate != null) {
+        url += '&start_date=$startDate&end_date=$endDate';
+      }
       final response = await http.get(
-        Uri.parse('$_baseUrl/api/v1/reports/daily-sales'),
+        Uri.parse(url),
         headers: _authHeaders,
       );
       if (response.statusCode == 200) {
@@ -85,6 +89,47 @@ class AdminService {
       debugPrint('Error fetching daily sales from API: $e');
     }
     return DailySalesStats(totalSales: 0.0, totalTransactions: 0, cashSales: 0.0, gcashSales: 0.0);
+  }
+
+  Future<Map<String, dynamic>> fetchSalesAnalyticsWithBreakdown({String period = 'today', String? startDate, String? endDate}) async {
+    try {
+      String url = '$_baseUrl/api/v1/reports/daily-sales?period=$period';
+      if (startDate != null && endDate != null) {
+        url += '&start_date=$startDate&end_date=$endDate';
+      }
+      final response = await http.get(
+        Uri.parse(url),
+        headers: _authHeaders,
+      );
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        final data = decoded['data'] ?? decoded;
+        final stats = DailySalesStats.fromJson(data);
+
+        // ✅ Tinitiyak na nasasalo ang chart breakdown mula sa API response[cite: 18]
+        final List breakdown = data['chart_breakdown'] ?? data['breakdown'] ?? [];
+
+        // Top-selling dishes based on actual paid/completed order items[cite: 18]
+        final List topItemsRaw = (data['top_items'] ?? data['top_dishes'] ?? data['top_selling_items'] ?? data['best_sellers'] ?? data['top_menu_items'] ?? []) as List? ?? [];
+        final List<TopDishItem> topDishes = topItemsRaw
+            .whereType<Map>()
+            .map((e) => TopDishItem.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+
+        return {
+          'stats': stats,
+          'breakdown': breakdown,
+          'top_items': topDishes,
+        };
+      }
+    } catch (e) {
+      debugPrint('Error fetching sales breakdown: $e');
+    }
+    return {
+      'stats': DailySalesStats(totalSales: 0.0, totalTransactions: 0, cashSales: 0.0, gcashSales: 0.0),
+      'breakdown': [],
+      'top_items': <TopDishItem>[],
+    };
   }
 
   /// PATCH /api/v1/orders/:id/status
@@ -145,6 +190,42 @@ class AdminService {
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
       debugPrint('Error processing payment via API: $e');
+    }
+    return false;
+  }
+
+  /// GET /api/v1/menu
+  Future<List<Map<String, dynamic>>> fetchMenuInventory() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl/api/v1/menu'),
+        headers: _authHeaders,
+      );
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        final List list = decoded['data'] ?? decoded['items'] ?? [];
+        return list.map((e) => Map<String, dynamic>.from(e)).toList();
+      }
+    } catch (e) {
+      debugPrint('Error fetching menu inventory: $e');
+    }
+    return [];
+  }
+
+  /// PATCH /api/v1/menu/:id/stock
+  Future<bool> updateItemStock({required int itemId, required int stockQuantity, String adjustmentType = 'RESTOCK'}) async {
+    try {
+      final response = await http.patch(
+        Uri.parse('$_baseUrl/api/v1/menu/$itemId/stock'),
+        headers: _authHeaders,
+        body: jsonEncode({
+          "stock_quantity": stockQuantity,
+          "adjustment_type": adjustmentType,
+        }),
+      );
+      return response.statusCode == 200 || response.statusCode == 201;
+    } catch (e) {
+      debugPrint('Error updating item stock: $e');
     }
     return false;
   }

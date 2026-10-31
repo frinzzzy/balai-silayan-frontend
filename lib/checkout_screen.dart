@@ -130,7 +130,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     if (targetSessionId == null) {
       try {
         final sessionRes = await http.post(
-          Uri.parse('http://localhost:5000/api/v1/dev/force-active-session'),
+          Uri.parse('$_baseUrl/api/v1/dev/force-active-session'),
           headers: {"Content-Type": "application/json"},
           body: jsonEncode({"table_id": targetTableId}),
         );
@@ -203,7 +203,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       };
 
       final response = await http.post(
-        Uri.parse('http://localhost:5000/api/v1/orders'),
+        Uri.parse('$_baseUrl/api/v1/orders'),
         headers: reqHeaders,
         body: jsonEncode(transactionBody),
       );
@@ -270,7 +270,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             (errorMessage.toLowerCase().contains('active') || errorMessage.toLowerCase().contains('not active') || errorMessage.toLowerCase().contains('unauthorized')))) {
           try {
             final sessionRes = await http.post(
-              Uri.parse('http://localhost:5000/api/v1/dev/force-active-session'),
+              Uri.parse('$_baseUrl/api/v1/dev/force-active-session'),
               headers: {"Content-Type": "application/json"},
               body: jsonEncode({"table_id": targetTableId}),
             );
@@ -287,7 +287,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
                 transactionBody["session_id"] = newSessionId;
                 final retryResponse = await http.post(
-                  Uri.parse('http://localhost:5000/api/v1/orders'),
+                  Uri.parse('$_baseUrl/api/v1/orders'),
                   headers: reqHeaders,
                   body: jsonEncode(transactionBody),
                 );
@@ -327,7 +327,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
           try {
             final retryResponse = await http.post(
-              Uri.parse('http://localhost:5000/api/v1/orders'),
+              Uri.parse('$_baseUrl/api/v1/orders'),
               headers: reqHeaders,
               body: jsonEncode(transactionBody),
             );
@@ -433,6 +433,38 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  Widget _buildItemImageWidget(FoodItem item) {
+    final String? imgUrl = item.imageUrl;
+    if (imgUrl != null && imgUrl.startsWith('lib/menus/')) {
+      return Image.asset(
+        imgUrl,
+        width: 52,
+        height: 52,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _buildItemFallbackText(item),
+      );
+    }
+    if (imgUrl != null && imgUrl.startsWith('http')) {
+      return Image.network(
+        imgUrl,
+        width: 52,
+        height: 52,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _buildItemFallbackText(item),
+      );
+    }
+    return _buildItemFallbackText(item);
+  }
+
+  Widget _buildItemFallbackText(FoodItem item) {
+    return Center(
+      child: Text(
+        item.name.isNotEmpty ? item.name.substring(0, 1) : 'D',
+        style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
@@ -446,7 +478,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF203F35), size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => Navigator.pop(context, _editableCart),
         ),
         title: Text(
           isAdditional ? 'Verify Additional Order' : 'Verify Order Details',
@@ -546,14 +578,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                       child: Row(
                                         children: [
                                           Container(
-                                            padding: const EdgeInsets.all(12),
+                                            width: 52,
+                                            height: 52,
                                             decoration: BoxDecoration(
                                               color: const Color(0xFFEEE7D9),
                                               borderRadius: BorderRadius.circular(12),
                                             ),
-                                            child: Text(
-                                              item.name.isNotEmpty ? item.name.substring(0, 1) : 'D',
-                                              style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                                            child: ClipRRect(
+                                              borderRadius: BorderRadius.circular(12),
+                                              child: _buildItemImageWidget(item),
                                             ),
                                           ),
                                           const SizedBox(width: 14),

@@ -3,7 +3,6 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 
-import 'orders_screen.dart';
 import 'qr_scanner_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'user_session.dart';
@@ -43,6 +42,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   bool _isLoadingLiveOrder = true;
   bool _hasActiveOrder = true;
   bool _sessionWasClosed = false;
+  bool _billRequested = false;
 
   double _fetchedTotalAmount = 0.0;
   String _fetchedOrderCode = '';
@@ -106,6 +106,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         _fetchedOrderItems = widget.initialOrderItems ?? UserSession.lastPlacedOrderItems;
         _lastAppliedStatus = '';
         _lastNotifiedStatuses.clear();
+        _billRequested = false;
       });
       _fetchLatestOrderFromBackend();
     }
@@ -337,6 +338,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       onOrderUpdated: (data) => _applyLiveOrderUpdate(data),
       onStatusUpdated: (data) => _applyLiveOrderUpdate(data),
       onSessionClosed: (data) => _handleSessionClosed(data),
+      onBillRequested: (data) => _handleBillRequested(data),
     );
   }
 
@@ -463,6 +465,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       case 'SETTLED':
         _statusBadgeLabel = 'Paid';
         _stepperProgressIndex = 3;
+        _billRequested = false; // Na-settle na ang bill/session — bumalik sa normal na state.
         if (isStatusTransition && widget.orderId != null) {
           final dynamic targetId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
           _showSessionFinishedDialog(_fetchedOrderCode.isNotEmpty ? _fetchedOrderCode : UserSession.formatOrderCode(targetId));
@@ -487,6 +490,36 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     }
   }
 
+  /// Lock ang customer UI sa "Bill Requested / Receipt Summary" state kapag
+  /// nakarating sa backend ang bill request para sa kasalukuyang session.
+  void _handleBillRequested(dynamic dataPayload) {
+    if (!mounted) return;
+    
+    if (dataPayload != null) {
+      final Map<String, dynamic> data = dataPayload is Map<String, dynamic>
+          ? dataPayload
+          : (dataPayload is Map ? Map<String, dynamic>.from(dataPayload) : {});
+          
+      final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
+      final int? eventTableId = int.tryParse(data['table_id']?.toString() ?? data['table_number']?.toString() ?? '');
+      final dynamic eventSessionId = data['session_id'];
+
+      // Strict scoping
+      if (eventTableId != null && eventTableId != currentTable) return;
+      if (eventTableId == null && eventSessionId != null) {
+        final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+        if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
+          return;
+        }
+      }
+    }
+    
+    setState(() {
+      _billRequested = true;
+      _showLiveTrackerView = false;
+    });
+  }
+
   void _applyLiveOrderUpdate(dynamic eventPayloadData) {
     if (eventPayloadData == null || !mounted) return;
 
@@ -501,26 +534,22 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? data['order_id'] ?? data['id'];
     final dynamic eventSessionId = orderPayload['session_id'] ?? data['session_id'];
 
+    // Strict Scoping Rule: Reject events targeting other tables
     if (eventTableId != null && eventTableId != currentTable) {
       return;
     }
-
-    final dynamic targetOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
-    if (eventOrderId != null && targetOrderId != null) {
-      // Gumagamit ng normalized na comparison upang mag-handle nang maayos ng
-      // integer at string ticket formats (hal. int 12 vs '#BS-0012').
-      if (!SocketService.isSameOrder(eventOrderId, targetOrderId)) {
-        return; // Huwag galawin o i-trigger kung para sa ibang ticket/order!
+    
+    // Strict Scoping Rule: If eventTableId is null, fall back to session validation
+    if (eventTableId == null && eventSessionId != null) {
+      final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
+        return;
       }
     }
-
-    if (eventSessionId != null) {
-      UserSession.activeSessionId = int.tryParse(eventSessionId.toString());
-      UserSession.sessionId = eventSessionId.toString();
-    }
-
-    if (eventOrderId != null) {
-      UserSession.lastPlacedOrderId = eventOrderId;
+    
+    // If we have absolutely no identifiers, discard it to avoid cross-talk.
+    if (eventTableId == null && eventSessionId == null && eventOrderId == null) {
+      return;
     }
 
     final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? data['status'] ?? data['order_status'] ?? '').toString().toUpperCase();
@@ -529,14 +558,33 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       _declineReason = rStr;
     }
 
+    // Bill request events (hal. mula sa backend 'bill_requested') ay may status
+    // na empty — kaya itinatambay tayo ng maayos bago i-process bilang order update.
+    final bool isBillRequestedEvent = status.isEmpty && (
+      data['bill_requested_at'] != null ||
+      data['bill_status'] != null ||
+      data['grand_total'] != null ||
+      data['total_orders'] != null ||
+      data['event_type'] == 'bill_requested' ||
+      data['event'] == 'bill_requested'
+    );
+
+    if (isBillRequestedEvent) {
+      _handleBillRequested(data);
+      return;
+    }
+
+    // 1. GLOBAL NOTIFICATIONS (Maaabutan agad siya basta tama ang table id)
     if (status.isNotEmpty) {
       final String orderKey = (eventOrderId ?? widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? 'default').toString();
       if (_lastNotifiedStatuses[orderKey] != status) {
         _lastNotifiedStatuses[orderKey] = status;
 
-        final String ticketCode = _fetchedOrderCode.isNotEmpty
-            ? _fetchedOrderCode
-            : UserSession.formatOrderCode(eventOrderId ?? widget.orderId ?? UserSession.lastPlacedOrderId);
+        final String ticketCode = eventOrderId != null
+            ? UserSession.formatOrderCode(eventOrderId)
+            : (_fetchedOrderCode.isNotEmpty
+                ? _fetchedOrderCode
+                : UserSession.formatOrderCode(widget.orderId ?? UserSession.lastPlacedOrderId));
 
         Color alertBg = const Color(0xFF203F35);
         String title = '$ticketCode: Order Status Update';
@@ -579,6 +627,24 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       }
     }
 
+    // 2. ISOLATE INTERNAL UI STATE UPDATE
+    // Update local state ONLY if the incoming event belongs to the specific ticket we are currently tracking on this screen.
+    final dynamic currentTargetOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
+    if (eventOrderId != null && currentTargetOrderId != null) {
+      if (!SocketService.isSameOrder(eventOrderId, currentTargetOrderId)) {
+        return; // Kung ibang ticket ang ina-update, huminto na rito dahil naipadala na ang notif. Hindi gagalaw ang local state.
+      }
+    }
+
+    if (eventSessionId != null) {
+      UserSession.activeSessionId = int.tryParse(eventSessionId.toString());
+      UserSession.sessionId = eventSessionId.toString();
+    }
+
+    if (eventOrderId != null) {
+      UserSession.lastPlacedOrderId = eventOrderId;
+    }
+
     setState(() {
       _showLiveTrackerView = true;
       if (status.isNotEmpty) {
@@ -601,8 +667,20 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
     final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? data['table_id']?.toString() ?? '');
     final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? data['order_id'] ?? data['id'];
+    final dynamic eventSessionId = orderPayload['session_id'] ?? data['session_id'];
 
     if (eventTableId != null && eventTableId != currentTable) {
+      return;
+    }
+    
+    if (eventTableId == null && eventSessionId != null) {
+      final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
+        return;
+      }
+    }
+    
+    if (eventTableId == null && eventSessionId == null && eventOrderId == null) {
       return;
     }
 
@@ -709,6 +787,11 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                   ),
                   child: _showLiveTrackerView
                       ? _buildLiveStatusTrackerView(
+                    displayOrderCode,
+                    tableString,
+                  )
+                      : _billRequested
+                      ? _buildBillRequestedView(
                     displayOrderCode,
                     tableString,
                   )
@@ -867,20 +950,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           ),
           Row(
             children: [
-              IconButton(
-                icon: const Icon(
-                  Icons.point_of_sale_outlined,
-                  color: Color(0xFF203F35),
-                  size: 22,
-                ),
-                tooltip: 'Cashier Station',
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const OrdersScreen(cartItems: []),
-                  ),
-                ),
-              ),
               InkWell(
                 onTap: () => AudioNotificationService.showNotificationHistory(context),
                 borderRadius: BorderRadius.circular(22),
@@ -992,6 +1061,86 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         _buildContextInfoBox(),
         const SizedBox(height: 28),
         _buildConfirmationActionButtons(),
+      ],
+    );
+  }
+
+  /// Bill Requested / Receipt Summary state — i-lock ang customer dito kapag
+  /// na-request na ang bill, imbes na bumalik sa live order tracking.
+  Widget _buildBillRequestedView(String orderCode, String tableString) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        Container(
+          width: 76,
+          height: 76,
+          decoration: BoxDecoration(
+            color: const Color(0xFFEAF0E9),
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFF53766C)),
+          ),
+          child: const Center(
+            child: Icon(Icons.receipt_long, size: 32, color: Color(0xFF203F35)),
+          ),
+        ),
+        const SizedBox(height: 20),
+        const Text(
+          'BILL REQUESTED',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFFA47C3D),
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Bill is on the way.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF203F35),
+            height: 1.2,
+          ),
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          'Salamat! Our staff has been notified to prepare your official receipt or collect payment.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: Color(0xFF788078), height: 1.4),
+        ),
+        const SizedBox(height: 20),
+        _buildOrderSummaryCard(orderCode, tableString),
+        const SizedBox(height: 16),
+        _buildContextInfoBox(),
+        const SizedBox(height: 28),
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF203F35),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              elevation: 0,
+            ),
+            onPressed: _navigateToMenu,
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'Back to menu',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                SizedBox(width: 8),
+                Icon(Icons.arrow_forward, color: Colors.white, size: 18),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }

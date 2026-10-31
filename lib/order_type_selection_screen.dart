@@ -7,6 +7,8 @@ import 'qr_scanner_screen.dart';
 import 'user_session.dart';
 import 'order_status_screen.dart';
 import 'services/audio_notification_service.dart';
+import 'services/socket_service.dart';
+import 'config/api_config.dart';
 
 class OrderTypeSelectionScreen extends StatefulWidget {
   final int tableNumber;
@@ -26,9 +28,11 @@ class OrderTypeSelectionScreen extends StatefulWidget {
 }
 
 class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
+  final SocketService _socketService = SocketService();
   bool _isAdditionalOrderSelected = false;
   bool _isLoadingSession = false;
   bool _isLoadingOrders = false;
+  String get _baseUrl => ApiConfig.baseUrl;
 
   int? _resolvedTableId;
   int? _resolvedTableNumber;
@@ -48,13 +52,87 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
     } else {
       _fetchUnfinishedOrders();
     }
+    
+    _initSocket();
+  }
+
+  void _initSocket() {
+    _socketService.connect(
+      onOrderUpdated: _handleSocketUpdate,
+      onStatusUpdated: _handleSocketUpdate,
+      onSessionClosed: _handleSocketUpdate,
+    );
+  }
+
+  void _handleSocketUpdate(dynamic event) {
+    if (!mounted || event == null) return;
+    
+    final Map<String, dynamic> payload = event is Map ? Map<String, dynamic>.from(event) : {};
+    final Map<String, dynamic> orderPayload = payload['order'] is Map ? Map<String, dynamic>.from(payload['order']) : payload;
+    
+    final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? payload['table_id']?.toString() ?? '');
+    
+    if (eventTableId != null && eventTableId != (_resolvedTableId ?? widget.tableId)) {
+      return; 
+    }
+    
+    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
+    final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
+    final String orderCode = eventOrderId != null ? UserSession.formatOrderCode(eventOrderId) : (orderPayload['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}');
+
+    if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
+      AudioNotificationService.showAggressiveBanner(
+        context: context,
+        title: "$orderCode: Payment Completed",
+        message: "Your table session receipt has been settled.",
+        backgroundColor: const Color(0xFF10B981),
+        icon: Icons.check_circle,
+      );
+    } else if (status == 'DECLINED' || status == 'REJECTED') {
+      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
+      AudioNotificationService.showAggressiveBanner(
+        context: context,
+        title: "$orderCode: Order Status: DECLINED",
+        message: "Reason: ${reason.isNotEmpty ? reason : "Please check with staff for details."}",
+        backgroundColor: const Color(0xFFEF4444),
+        icon: Icons.cancel,
+      );
+    } else if (status == 'PREPARING') {
+      AudioNotificationService.showAggressiveBanner(
+        context: context,
+        title: "$orderCode: Order Status: PREPARING",
+        message: "The kitchen is now preparing your delicious meal.",
+        backgroundColor: const Color(0xFFD7BC86),
+        icon: Icons.kitchen,
+      );
+    } else if (status == 'READY' || status == 'SERVED') {
+      AudioNotificationService.showAggressiveBanner(
+        context: context,
+        title: status == 'SERVED' ? "$orderCode: Order Status: SERVED" : "$orderCode: Order Status: READY",
+        message: status == 'SERVED' ? "Your order is hot and ready for your table." : "Your order is ready for pickup / service.",
+        backgroundColor: const Color(0xFF22C55E),
+        icon: Icons.restaurant,
+      );
+    }
+
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        _fetchUnfinishedOrders(silent: false);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _socketService.disconnect();
+    super.dispose();
   }
 
   Future<void> _processQrScanToken(String token) async {
     setState(() => _isLoadingSession = true);
     try {
       final response = await http
-          .get(Uri.parse('http://localhost:5000/api/session/scan/$token'))
+          .get(Uri.parse('$_baseUrl/api/session/scan/$token'))
           .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
@@ -80,13 +158,13 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
     }
   }
 
-  Future<void> _fetchUnfinishedOrders() async {
+  Future<void> _fetchUnfinishedOrders({bool silent = false}) async {
     final tId = _resolvedTableId ?? widget.tableId;
-    setState(() => _isLoadingOrders = true);
+    if (!silent) setState(() => _isLoadingOrders = true);
 
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/v1/orders/unfinished?table_id=$tId'),
+        Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$tId'),
       );
 
       if (response.statusCode == 200) {
@@ -105,7 +183,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
         _isAdditionalOrderSelected = false;
       });
     } finally {
-      if (mounted) setState(() => _isLoadingOrders = false);
+      if (mounted && !silent) setState(() => _isLoadingOrders = false);
     }
   }
 
@@ -130,6 +208,11 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
       final rawParentId = selectedOrder['id'] ?? selectedOrder['order_id'];
       UserSession.targetParentOrderId = rawParentId?.toString();
     } else {
+      UserSession.isAdditionalOrder = false;
+      UserSession.targetParentOrderId = null;
+      UserSession.lastPlacedOrderId = null;
+      UserSession.firstOrderId = null;
+
       // NEW ORDER FLOW: Kung may mga lumang orders, bigyan ng pagpipilian ang user
       if (hasUnfinished) {
         final actionChoice = await showDialog<String>(

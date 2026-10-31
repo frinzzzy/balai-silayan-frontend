@@ -7,7 +7,8 @@ import 'dart:convert';
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
-import 'bill_requested_screen.dart';
+// TEMP DISABLED (Bill Request feature on hold)
+// import 'bill_requested_screen.dart';
 import 'user_session.dart';
 import 'config/api_config.dart';
 
@@ -23,8 +24,9 @@ class SessionBillScreen extends StatefulWidget {
 
 class _SessionBillScreenState extends State<SessionBillScreen> {
   bool _isLoading = true;
-  bool _isRequestingBill = false;
-  bool _billRequestedSubmitted = false;
+  // TEMP DISABLED (Bill Request feature on hold)
+  // bool _isRequestingBill = false;
+  // bool _billRequestedSubmitted = false;
   String? _errorMessage;
   late io.Socket _socket;
 
@@ -272,36 +274,37 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     }
   }
 
-  Future<void> _submitRequestBill() async {
-    setState(() => _isRequestingBill = true);
-    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
+  // TEMP DISABLED (Bill Request feature on hold)
+  // Future<void> _submitRequestBill() async {
+  //   setState(() => _isRequestingBill = true);
+  //   final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
 
-    try {
-      await http.get(
-        Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill'),
-        headers: {'Content-Type': 'application/json'},
-      );
-    } catch (_) {}
+  //   try {
+  //     await http.get(
+  //       Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill'),
+  //       headers: {'Content-Type': 'application/json'},
+  //     );
+  //   } catch (_) {}
 
-    if (mounted) {
-      setState(() {
-        _isRequestingBill = false;
-        _billRequestedSubmitted = true;
-      });
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => BillRequestedScreen(
-            tableId: tableNum,
-            isTakeout: widget.isTakeout,
-            totalAmount: _grandTotal,
-            foodDrinksTotal: _foodDrinksTotal,
-            addOnsTotal: _addOnsTotal,
-          ),
-        ),
-      );
-    }
-  }
+  //   if (mounted) {
+  //     setState(() {
+  //       _isRequestingBill = false;
+  //       _billRequestedSubmitted = true;
+  //     });
+  //     Navigator.pushReplacement(
+  //       context,
+  //       MaterialPageRoute(
+  //         builder: (context) => BillRequestedScreen(
+  //           tableId: tableNum,
+  //           isTakeout: widget.isTakeout,
+  //           totalAmount: _grandTotal,
+  //           foodDrinksTotal: _foodDrinksTotal,
+  //           addOnsTotal: _addOnsTotal,
+  //         ),
+  //       ),
+  //     );
+  //   }
+  // }
 
   @override
   Widget build(BuildContext context) {
@@ -309,9 +312,6 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     final String tableString = widget.isTakeout
         ? 'Takeout'
         : 'Table ${tableNum.toString().padLeft(2, '0')}';
-
-    // Sinisigurong may naiwang selected o may laman para ma-enable ang button
-    final bool hasSelectedOrders = _sessionOrders.any((o) => o['isSelected'] == true);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F4EC),
@@ -360,7 +360,8 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                     const SizedBox(height: 16),
                     _buildWalletContextNote(),
                     const SizedBox(height: 24),
-                    _buildPrimaryActionButton(hasSelectedOrders),
+                    // TEMP DISABLED (Bill Request feature on hold)
+                    // _buildPrimaryActionButton(hasSelectedOrders),
                     const SizedBox(height: 16),
                   ],
                 ),
@@ -540,13 +541,11 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         ? 'Paid • Session Closed'
         : isClosed
         ? 'Session Closed'
-        : _billRequestedSubmitted
-        ? 'Bill Requested'
         : 'Active Session';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: isPaid || isClosed || _billRequestedSubmitted
+        color: isPaid || isClosed
             ? const Color(0xFFEAF0E9)
             : const Color(0xFFEEE7D9),
         borderRadius: BorderRadius.circular(100),
@@ -555,11 +554,11 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            isPaid || isClosed || _billRequestedSubmitted
+            isPaid || isClosed
                 ? Icons.check_circle_outline
                 : Icons.receipt_long_outlined,
             size: 13,
-            color: isPaid || isClosed || _billRequestedSubmitted
+            color: isPaid || isClosed
                 ? const Color(0xFF203F35)
                 : const Color(0xFFA47C3D),
           ),
@@ -569,7 +568,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w600,
-              color: isPaid || isClosed || _billRequestedSubmitted
+              color: isPaid || isClosed
                   ? const Color(0xFF203F35)
                   : const Color(0xFFA47C3D),
             ),
@@ -851,9 +850,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              _billRequestedSubmitted
-                  ? 'Your bill request was sent for the selected tickets! A waiter is bringing your receipt.'
-                  : 'Piliin ang mga ticket sa itaas para sa hiwalay na paghingi ng bill o pagbayad.',
+              'Piliin ang mga ticket sa itaas para sa hiwalay na pagbabayad.',
               style: const TextStyle(
                 fontSize: 12,
                 color: Color(0xFF53766C),
@@ -866,65 +863,65 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     );
   }
 
-  Widget _buildPrimaryActionButton(bool hasSelectedOrders) {
-    return SizedBox(
-      width: double.infinity,
-      height: 52,
-      child: ElevatedButton(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: (!hasSelectedOrders ||
-              _isRequestingBill ||
-              _billRequestedSubmitted ||
-              _sessionStatus == 'CLOSED' ||
-              _orderStatus == 'COMPLETED')
-              ? const Color(0xFF788078)
-              : const Color(0xFF203F35),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          elevation: 0,
-        ),
-        onPressed: (!hasSelectedOrders ||
-            _isRequestingBill ||
-            _billRequestedSubmitted ||
-            _sessionStatus == 'CLOSED' ||
-            _orderStatus == 'COMPLETED')
-            ? null
-            : _submitRequestBill,
-        child: _isRequestingBill
-            ? const CircularProgressIndicator(color: Colors.white)
-            : Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              _orderStatus == 'COMPLETED'
-                  ? 'Paid ✓'
-                  : _sessionStatus == 'CLOSED'
-                  ? 'Session Closed'
-                  : _billRequestedSubmitted
-                  ? 'Bill Requested ✓'
-                  : 'Request Bill for Selected',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              _billRequestedSubmitted ||
-                  _sessionStatus == 'CLOSED' ||
-                  _orderStatus == 'COMPLETED'
-                  ? Icons.check_circle
-                  : Icons.receipt_long,
-              color: Colors.white,
-              size: 18,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  // TEMP DISABLED (Bill Request feature on hold)
+  // Widget _buildPrimaryActionButton(bool hasSelectedOrders) {
+  //   return SizedBox(
+  //     width: double.infinity,
+  //     height: 52,
+  //     child: ElevatedButton(
+  //       style: ElevatedButton.styleFrom(
+  //         backgroundColor: (!hasSelectedOrders ||
+  //             _isRequestingBill ||
+  //             _billRequestedSubmitted ||
+  //             _sessionStatus == 'CLOSED' ||
+  //             _orderStatus == 'COMPLETED')
+  //             ? const Color(0xFF788078)
+  //             : const Color(0xFF203F35),
+  //         shape: RoundedRectangleBorder(
+  //           borderRadius: BorderRadius.circular(10),
+  //         ),
+  //         elevation: 0,
+  //       ),
+  //       onPressed: (!hasSelectedOrders ||
+  //           _isRequestingBill ||
+  //           _billRequestedSubmitted ||
+  //           _sessionStatus == 'CLOSED' ||
+  //           _orderStatus == 'COMPLETED')
+  //           ? null
+  //           : _submitRequestBill,
+  //       child: _isRequestingBill
+  //           ? const CircularProgressIndicator(color: Colors.white)
+  //           : Row(
+  //         mainAxisAlignment: MainAxisAlignment.center,
+  //         children: [
+  //           Text(
+  //             _orderStatus == 'COMPLETED'
+  //                 ? 'Paid ✓'
+  //                 : _sessionStatus == 'CLOSED'
+  //                 ? 'Session Closed'
+  //                 : _billRequestedSubmitted
+  //                 ? 'Bill Requested ✓'
+  //                 : 'Request Bill for Selected',
+  //             style: const TextStyle(
+  //               color: Colors.white,
+  //               fontWeight: FontWeight.bold,
+  //               fontSize: 14,
+  //             ),
+  //           ),
+  //           const SizedBox(width: 8),
+  //           Icon(
+  //             _billRequestedSubmitted ||
+  //                 _sessionStatus == 'CLOSED' ||
+  //                 _orderStatus == 'COMPLETED'
+  //                 ? Icons.check_circle
+  //                 : Icons.receipt_long,
+  //             color: Colors.white,
+  //             size: 18,
+  //           ),
+  //         ],
+  //       ),
+  //     );
+  //   }
 
   Widget _buildCustomerBottomNav(int tableNum) {
     return Container(

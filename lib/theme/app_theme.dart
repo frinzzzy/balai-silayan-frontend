@@ -13,6 +13,7 @@ class AppTheme {
   static const Color cherryPink = Color(0xFFF2BAC9);
   static const Color successGreen = Color(0xFF10B981);
   static const Color errorRust = Color(0xFF8E5136);
+  static const Color textDark = Color(0xFF203F35);
 
   static ThemeData get lightTheme {
     return ThemeData.light().copyWith(
@@ -25,16 +26,23 @@ class AppTheme {
       ),
       textTheme: const TextTheme(
         titleLarge: TextStyle(fontWeight: FontWeight.bold, color: darkCharcoal, letterSpacing: -0.3),
-        bodyMedium: TextStyle(color: mutedGray, height: 1.4),
+        bodyLarge: TextStyle(color: textDark, height: 1.4),
+        bodyMedium: TextStyle(color: textDark, height: 1.4),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: surfaceIvory,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        hintStyle: const TextStyle(color: mutedGray),
         labelStyle: const TextStyle(color: mutedGray, fontWeight: FontWeight.w500),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: borderWarm)),
         enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: borderWarm)),
         focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: primaryCrimson, width: 1.8)),
+      ),
+      textSelectionTheme: const TextSelectionThemeData(
+        cursorColor: textDark,
+        selectionColor: secondaryGold,
+        selectionHandleColor: textDark,
       ),
       cardTheme: CardThemeData(
         color: surfaceIvory,
