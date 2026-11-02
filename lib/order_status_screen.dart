@@ -512,6 +512,15 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           return;
         }
       }
+
+      // Spoke isolation: ignore bill events that don't belong to the tracked order.
+      final dynamic eventBillOrderId = data['order_id'] ?? data['id'];
+      final dynamic currentBillTargetOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
+      if (eventBillOrderId != null && currentBillTargetOrderId != null) {
+        if (!SocketService.isSameOrder(eventBillOrderId, currentBillTargetOrderId)) {
+          return;
+        }
+      }
     }
     
     setState(() {
@@ -574,6 +583,15 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       return;
     }
 
+    // Spoke isolation: before any notification/state update, ensure the event
+    // belongs to the specific order this screen is currently tracking.
+    final dynamic currentTargetOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
+    if (eventOrderId != null && currentTargetOrderId != null) {
+      if (!SocketService.isSameOrder(eventOrderId, currentTargetOrderId)) {
+        return;
+      }
+    }
+
     // 1. GLOBAL NOTIFICATIONS (Maaabutan agad siya basta tama ang table id)
     if (status.isNotEmpty) {
       final String orderKey = (eventOrderId ?? widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? 'default').toString();
@@ -624,15 +642,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           backgroundColor: alertBg,
           icon: icon,
         );
-      }
-    }
-
-    // 2. ISOLATE INTERNAL UI STATE UPDATE
-    // Update local state ONLY if the incoming event belongs to the specific ticket we are currently tracking on this screen.
-    final dynamic currentTargetOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
-    if (eventOrderId != null && currentTargetOrderId != null) {
-      if (!SocketService.isSameOrder(eventOrderId, currentTargetOrderId)) {
-        return; // Kung ibang ticket ang ina-update, huminto na rito dahil naipadala na ang notif. Hindi gagalaw ang local state.
       }
     }
 

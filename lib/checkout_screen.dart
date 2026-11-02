@@ -7,6 +7,7 @@ import 'order_status_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'menu_screen.dart';
 import 'user_session.dart';
+import 'services/socket_service.dart';
 import 'config/api_config.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -220,31 +221,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             createdOrderData?['order_id'] ??
             DateTime.now().millisecondsSinceEpoch;
 
-        int? sanitizedOrderId = int.tryParse(generatedOrderId?.toString() ?? '');
-
-        final double? sessionTotal = double.tryParse(
-          createdOrderData?['total_amount']?.toString() ?? '',
-        );
-        if (sessionTotal != null && sessionTotal > 0.0) {
-          _calculatedTotal = sessionTotal;
-        }
         final dynamic responseItems =
             responseData['data']?['items'] ?? createdOrderData?['items'];
         final List<dynamic>? initialOrderItems = responseItems is List
             ? List<dynamic>.from(responseItems)
             : null;
 
-        if (!safeIsAdditional && UserSession.firstOrderId == null && sanitizedOrderId != null) {
-          UserSession.firstOrderId = sanitizedOrderId;
-        }
-
-        UserSession.lastPlacedOrderId = generatedOrderId;
-        UserSession.lastPlacedOrderTotal = _calculatedTotal;
-        UserSession.lastPlacedOrderItems = initialOrderItems ?? orderItemsPayload;
-
-        if (safeIsAdditional) {
-          UserSession.targetParentOrderId = generatedOrderId?.toString();
-        }
+        _saveOrderSessionAndJoinSocketRooms(
+          createdOrderData: createdOrderData,
+          generatedOrderId: generatedOrderId,
+          targetTableId: targetTableId,
+          targetSessionId: targetSessionId,
+          initialOrderItems: initialOrderItems ?? orderItemsPayload,
+        );
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -297,8 +286,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   final dynamic createdOrderData = retryData['data']?['order'] ?? retryData['data'];
                   final dynamic generatedOrderId = createdOrderData?['id'] ?? createdOrderData?['order_id'] ?? DateTime.now().millisecondsSinceEpoch;
 
-                  UserSession.lastPlacedOrderId = generatedOrderId;
-                  UserSession.lastPlacedOrderTotal = _calculatedTotal;
+                  _saveOrderSessionAndJoinSocketRooms(
+                    createdOrderData: createdOrderData,
+                    generatedOrderId: generatedOrderId,
+                    targetTableId: targetTableId,
+                    targetSessionId: newSessionId,
+                    initialOrderItems: orderItemsPayload,
+                  );
 
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -337,8 +331,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               final dynamic createdOrderData = retryData['data']?['order'] ?? retryData['data'];
               final dynamic generatedOrderId = createdOrderData?['id'] ?? createdOrderData?['order_id'] ?? DateTime.now().millisecondsSinceEpoch;
 
-              UserSession.lastPlacedOrderId = generatedOrderId;
-              UserSession.lastPlacedOrderTotal = _calculatedTotal;
+              _saveOrderSessionAndJoinSocketRooms(
+                createdOrderData: createdOrderData,
+                generatedOrderId: generatedOrderId,
+                targetTableId: targetTableId,
+                targetSessionId: targetSessionId,
+                initialOrderItems: orderItemsPayload,
+              );
 
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -431,6 +430,56 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       ),
       (route) => route.isFirst,
     );
+  }
+
+  void _saveOrderSessionAndJoinSocketRooms({
+    required dynamic createdOrderData,
+    required dynamic generatedOrderId,
+    required int targetTableId,
+    required int? targetSessionId,
+    List<dynamic>? initialOrderItems,
+  }) {
+    int? sanitizedOrderId = int.tryParse(generatedOrderId?.toString() ?? '');
+
+    final dynamic respSessionId = createdOrderData?['session_id'];
+    int? resolvedSessionId = targetSessionId;
+    if (respSessionId != null) {
+      resolvedSessionId = int.tryParse(respSessionId.toString()) ?? targetSessionId;
+    }
+
+    if (resolvedSessionId != null) {
+      UserSession.activeSessionId = resolvedSessionId;
+      UserSession.sessionId = resolvedSessionId.toString();
+    }
+
+    UserSession.activeTableId = targetTableId;
+    UserSession.activeTableNumber = targetTableId;
+
+    final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
+    if (!isAdditional && UserSession.firstOrderId == null && sanitizedOrderId != null) {
+      UserSession.firstOrderId = sanitizedOrderId;
+    }
+
+    UserSession.lastPlacedOrderId = generatedOrderId;
+    UserSession.lastPlacedOrderTotal = _calculatedTotal;
+    if (initialOrderItems != null) {
+      UserSession.lastPlacedOrderItems = initialOrderItems;
+    }
+
+    if (isAdditional) {
+      UserSession.targetParentOrderId = generatedOrderId?.toString();
+    }
+
+    try {
+      final socketService = SocketService();
+      socketService.joinTableRoom(targetTableId);
+      if (resolvedSessionId != null) {
+        socketService.joinSessionRoom(resolvedSessionId);
+      }
+      if (generatedOrderId != null) {
+        socketService.joinOrderRoom(generatedOrderId);
+      }
+    } catch (_) {}
   }
 
   Widget _buildItemImageWidget(FoodItem item) {

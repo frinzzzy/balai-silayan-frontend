@@ -289,30 +289,27 @@ class _MenuScreenState extends State<MenuScreen> {
 
     final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
     final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? payload['table_id']?.toString() ?? '');
-
-    // Strict Scoping: Ignore if eventTableId exists but doesn't match
-    if (eventTableId != null && eventTableId != currentTable) {
-      return;
-    }
-    
-    // Strict Scoping: If there's no eventTableId at all, try checking session_id
     final int? eventSessionId = int.tryParse(orderPayload['session_id']?.toString() ?? payload['session_id']?.toString() ?? '');
-    if (eventTableId == null) {
-       final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-       if (eventSessionId != null && currentSessionId != null && eventSessionId != currentSessionId) {
-         return;
-       }
-    }
-    
     final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
-    if (eventTableId == null && eventSessionId == null && eventOrderId == null) {
-       return;
+
+    // 1. STRICT EVENT FILTERING
+    if (eventTableId != null) {
+      if (eventTableId != currentTable) {
+        return; // Mismatch table, ignore
+      }
+    } else if (eventSessionId != null) {
+      final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      if (currentSessionId != null && eventSessionId != currentSessionId) {
+        return; // Mismatch session, ignore
+      }
+    } else if (eventOrderId == null) {
+      return; // Neither table_id, session_id, nor order_id present, ignore
     }
 
     final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
     final String orderCode = eventOrderId != null ? UserSession.formatOrderCode(eventOrderId) : (orderPayload['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}');
 
-    // 1. GLOBAL NOTIFICATIONS (Maaabutan agad siya basta tama ang table id)
+    // 2. GLOBAL NOTIFICATIONS FIRST (Unconditional for valid table/session scope)
     if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
       AudioNotificationService.showAggressiveBanner(
         context: context,
@@ -348,32 +345,30 @@ class _MenuScreenState extends State<MenuScreen> {
       );
     }
 
-    // 2. ISOLATE INTERNAL UI POP-UP STATE
-    // Inalis na natin ang mahigpit na pagharang (blocking) dahil minsan ay null ang UserSession variables
-    // habang nag-scroll ang user sa menu na nagreresulta sa hindi paglabas ng Pop-up!
-    // Hahayaan na natin itong dumiretso sa pop-up checking basta ang event table id ay tugma (nagawa na sa itaas).
+    // 3. ISOLATE INTERNAL POP-UPS (THE SPOKE)
     final dynamic currentTrackedOrderId = (widget.isAdditionalOrder || UserSession.isAdditionalOrder)
-        ? UserSession.targetParentOrderId 
+        ? UserSession.targetParentOrderId
         : (UserSession.lastPlacedOrderId ?? UserSession.firstOrderId);
 
-    if (currentTrackedOrderId != null && eventOrderId != null) {
+    bool shouldShowPopup = true;
+    if (eventOrderId != null && currentTrackedOrderId != null) {
       if (!SocketService.isSameOrder(eventOrderId, currentTrackedOrderId)) {
-        return; // Iblock lamang kung talagang SURE tayo na ibang ticket ang tinitignan niya
+        shouldShowPopup = false; // Mismatched specific order ID, skip intrusive dialog
       }
     }
 
-    // 3. SHOW POP-UP DIALOG KUNG "SAME TICKET"
-    // Hihintayin nating sigurado ang delay bago natin i-redirect ang user para
-    // sigurado ang sync sa server side pagbalik nila.
-    if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _handleTableOrderFinished(payload);
-      });
-    } else if (status == 'DECLINED' || status == 'REJECTED') {
-      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _showOrderDeclinedDialog(orderCode, reason);
-      });
+    // 4. TIMING FIX & DIALOG TRIGGER
+    if (shouldShowPopup) {
+      if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) _handleTableOrderFinished(payload);
+        });
+      } else if (status == 'DECLINED' || status == 'REJECTED') {
+        final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) _showOrderDeclinedDialog(orderCode, reason);
+        });
+      }
     }
   }
 
@@ -461,6 +456,19 @@ class _MenuScreenState extends State<MenuScreen> {
         final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
         if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
           return; // Ignore events for other sessions
+        }
+      }
+
+      final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? data['order_id'] ?? data['id'];
+
+      final bool isAdd = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
+      final dynamic targetId = isAdd 
+          ? UserSession.targetParentOrderId 
+          : (UserSession.lastPlacedOrderId ?? UserSession.firstOrderId);
+
+      if (eventOrderId != null && targetId != null) {
+        if (!SocketService.isSameOrder(eventOrderId, targetId)) {
+          return; // Ignore events for other tickets/orders
         }
       }
     }
