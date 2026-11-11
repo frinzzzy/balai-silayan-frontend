@@ -699,7 +699,47 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                           ),
                         ),
                       )
-                    else
+                    else ...[
+                      if (_sessionOrders.any(
+                            (order) => order['isRequested'] == true,
+                          ))
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF4F6F2),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: const Color(0xFFDDE5DB)),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.receipt_long,
+                                  size: 16,
+                                  color: Color(0xFF788078),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '${_sessionOrders.where((order) => order['isRequested'] == true).length} '
+                                    'ticket(s) already requested for billing. '
+                                    'They will reappear once staff reopens the bill.',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: Color(0xFF788078),
+                                      height: 1.35,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ..._sessionOrders.asMap().entries
                           .where((entry) => entry.value['isRequested'] != true)
                           .map(
@@ -708,6 +748,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                               entry.key,
                             ),
                           ),
+                    ],
                     const SizedBox(height: 12),
                     _buildPriceBreakdownCard(),
                     const SizedBox(height: 16),
