@@ -989,9 +989,9 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
               child: Divider(height: 1, color: Color(0xFFE5DFD3)),
             ),
             ImageFiltered(
-              imageFilter: isRequested
-                  ? ImageFilter.blur(sigmaX: 2.2, sigmaY: 2.2)
-                  : ImageFilter.blur(sigmaX: 0, sigmaY: 0),
+              // Bill requested: ipinapakita nang buo ang receipt details —
+              // HINDI na naka-blur.
+              imageFilter: ImageFilter.blur(sigmaX: 0, sigmaY: 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: items.map((item) {
