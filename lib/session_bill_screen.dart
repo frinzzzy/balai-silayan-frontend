@@ -14,6 +14,63 @@ import 'bill_requested_screen.dart';
 import 'user_session.dart';
 import 'config/api_config.dart';
 
+/// Resulta ng total computation para sa customer bill.
+class BillTotals {
+  const BillTotals({
+    this.grand = 0.0,
+    this.foodDrinks = 0.0,
+    this.addOns = 0.0,
+  });
+
+  final double grand;
+  final double foodDrinks;
+  final double addOns;
+}
+
+double _toAmount(dynamic val) {
+  if (val == null) return 0.0;
+  if (val is num) return val.toDouble();
+  if (val is String) return double.tryParse(val) ?? 0.0;
+  return 0.0;
+}
+
+/// Sinusuma lang ang mga orders na ibinigay. Kapag [onlySelected] = true,
+/// hindi kasama ang unticked at already bill-requested tickets.
+BillTotals computeBillTotals(
+  Iterable<Map<String, dynamic>> orders, {
+  bool onlySelected = false,
+}) {
+  double grand = 0.0;
+  double food = 0.0;
+  double addons = 0.0;
+
+  for (final Map<String, dynamic> order in orders) {
+    if (onlySelected &&
+        (order['isSelected'] != true || order['isRequested'] == true)) {
+      continue;
+    }
+
+    grand += _toAmount(order['order_total']);
+
+    final List items = order['items'] is List ? order['items'] as List : const [];
+    for (final dynamic rawItem in items) {
+      if (rawItem is! Map) continue;
+      final double unitPrice = _toAmount(rawItem['unit_price']);
+      final int qty = int.tryParse((rawItem['quantity'] ?? 1).toString()) ?? 1;
+      final double addonTotal = _toAmount(rawItem['addon_total']);
+
+      food += unitPrice * qty;
+      addons += addonTotal * qty;
+    }
+  }
+
+  return BillTotals(
+    grand: grand,
+    foodDrinks: food > 0 ? food : grand,
+    addOns: addons,
+  );
+}
+
 class SessionBillScreen extends StatefulWidget {
   final int? tableId;
   final bool isTakeout;
@@ -93,33 +150,18 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     return 0.0;
   }
 
-  // Kinukuwenta muli ang total batay lamang sa mga napiling (checked) tickets
+  // Kinukuwenta muli ang total batay lamang sa mga napiling (checked) tickets.
+  // Hindi kasama ang unticked at already bill-requested (hidden) tickets.
   void _recalculateTotals() {
-    double computedGrandTotal = 0.0;
-    double computedFoodTotal = 0.0;
-    double computedAddOnsTotal = 0.0;
-
-    for (var order in _sessionOrders) {
-      // Ang total ay para sa buong session. Ang checkbox ay para lang sa
-      // kung aling ticket ang ire-request ng bill, hindi para sa total.
-      double orderTotal = _parseDouble(order['order_total']);
-      computedGrandTotal += orderTotal;
-
-      final List items = order['items'] ?? [];
-      for (var item in items) {
-        double unitPrice = _parseDouble(item['unit_price']);
-        int qty = item['quantity'] ?? 1;
-        double addonTotal = _parseDouble(item['addon_total']);
-
-        computedFoodTotal += (unitPrice * qty);
-        computedAddOnsTotal += (addonTotal * qty);
-      }
-    }
+    final BillTotals totals = computeBillTotals(
+      _sessionOrders,
+      onlySelected: true,
+    );
 
     setState(() {
-      _grandTotal = computedGrandTotal;
-      _foodDrinksTotal = computedFoodTotal > 0 ? computedFoodTotal : computedGrandTotal;
-      _addOnsTotal = computedAddOnsTotal;
+      _grandTotal = totals.grand;
+      _foodDrinksTotal = totals.foodDrinks;
+      _addOnsTotal = totals.addOns;
     });
   }
 
@@ -442,6 +484,10 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
       return;
     }
 
+    // Kunin ang total ng napiling tickets BAGO i-mark na requested — dahil
+    // hindi na sila kasama sa computation pagkatapos ng request.
+    BillTotals requestedTotals = computeBillTotals(selectedTickets);
+
     final bool hasUnserved = selectedTickets.any((order) {
       final String status =
           (order['status'] ?? 'PENDING').toString().toUpperCase();
@@ -493,6 +539,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     };
 
     int successCount = 0;
+    final List<Map<String, dynamic>> successfulTickets = [];
     bool perTicketUnsupported = false;
     String lastRequestedAt = DateTime.now().toIso8601String();
     String? firstError;
@@ -509,6 +556,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
 
       if (result['ok'] == true) {
         successCount++;
+        successfulTickets.add(ticket);
         lastRequestedAt = (result['requestedAt'] ?? lastRequestedAt).toString();
         UserSession.setTicketBillRequested(orderId, lastRequestedAt);
       } else if (result['unsupported'] == true) {
@@ -535,11 +583,16 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         for (final Map<String, dynamic> ticket in selectedTickets) {
           UserSession.setTicketBillRequested(
               ticket['order_id'], lastRequestedAt);
+          successfulTickets.add(ticket);
           successCount++;
         }
       } else {
         firstError ??= (legacy['message'] ?? firstError ?? '').toString();
       }
+    }
+
+    if (successfulTickets.isNotEmpty) {
+      requestedTotals = computeBillTotals(successfulTickets);
     }
 
     if (mounted) {
@@ -571,9 +624,9 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
           builder: (context) => BillRequestedScreen(
             tableId: tableNum,
             isTakeout: widget.isTakeout,
-            totalAmount: _grandTotal,
-            foodDrinksTotal: _foodDrinksTotal,
-            addOnsTotal: _addOnsTotal,
+            totalAmount: requestedTotals.grand,
+            foodDrinksTotal: requestedTotals.foodDrinks,
+            addOnsTotal: requestedTotals.addOns,
             billRequestedAt: lastRequestedAt,
           ),
         ),
@@ -633,10 +686,28 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                           ),
                         ),
                       )
+                    else if (!_sessionOrders.any(
+                      (order) => order['isRequested'] != true,
+                    ))
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 40),
+                        child: Center(
+                          child: Text(
+                            "All orders have been requested for billing. Waiting for staff.",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Color(0xFF788078)),
+                          ),
+                        ),
+                      )
                     else
-                      ..._sessionOrders.asMap().entries.map(
-                            (entry) => _buildBilledOrderCard(entry.value, entry.key),
-                      ),
+                      ..._sessionOrders.asMap().entries
+                          .where((entry) => entry.value['isRequested'] != true)
+                          .map(
+                            (entry) => _buildBilledOrderCard(
+                              entry.value,
+                              entry.key,
+                            ),
+                          ),
                     const SizedBox(height: 12),
                     _buildPriceBreakdownCard(),
                     const SizedBox(height: 16),

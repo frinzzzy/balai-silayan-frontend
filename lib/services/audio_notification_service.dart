@@ -462,11 +462,16 @@ class AudioNotificationService {
     final String who = (customerName != null && customerName.trim().isNotEmpty)
         ? ' ($customerName)'
         : '';
+    final String ticketCode = rootOrderId != null && rootOrderId > 0
+        ? UserSession.formatOrderCode(rootOrderId)
+        : (orderId != null && orderId > 0
+              ? UserSession.formatOrderCode(orderId)
+              : 'BILL');
 
     unawaited(
       _presentBanner(
         title:
-            'Bill Requested — Table ${tableNumber.toString().padLeft(2, '0')}',
+            'Bill Requested — $ticketCode • Table ${tableNumber.toString().padLeft(2, '0')}',
         message:
             'May customer na humihingi ng bill$who.$total Pumunta na sa table.',
         backgroundColor: const Color(0xFF0EA5E9),
