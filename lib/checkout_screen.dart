@@ -264,6 +264,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           return;
         }
 
+        final bool sessionClosedError = response.statusCode == 409 &&
+            (errorCode == 'SESSION_CLOSED' ||
+                (errorBody is Map && errorBody['error'] == 'SESSION_CLOSED'));
+        if (sessionClosedError) {
+          setState(() => _isSubmitting = false);
+          _showSessionClosedDialog();
+          return;
+        }
+
         if (response.statusCode == 401 || response.statusCode == 403 ||
             (errorMessage.toLowerCase().contains('session') &&
             (errorMessage.toLowerCase().contains('active') || errorMessage.toLowerCase().contains('not active') || errorMessage.toLowerCase().contains('unauthorized')))) {
@@ -474,6 +483,46 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             },
             child: const Text(
               'Back to Menu',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Kapag na-settle na ang session (409 SESSION_CLOSED), huwag i-retry nang
+  /// tahimik — ipakita sa customer na kailangan niyang mag-scan muli.
+  void _showSessionClosedDialog() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Session ended',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+        ),
+        content: const Text(
+          'Na-settle na ang table session na ito. I-scan muli ang QR ng table '
+          'para magsimula ng bagong session.',
+          style: TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              UserSession.clearSession();
+              UserSession.clearAllBillRequests();
+              UserSession.targetParentOrderId = null;
+              UserSession.lastPlacedOrderId = null;
+              Navigator.of(context).popUntil((route) => route.isFirst);
+            },
+            child: const Text(
+              'OK',
               style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
           ),

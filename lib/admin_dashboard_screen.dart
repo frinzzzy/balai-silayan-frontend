@@ -147,7 +147,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (wasSeeded && newOrders.isNotEmpty) {
       _notifyNewOrders(newOrders);
     }
-    _notifyPendingBillRequests(orders);
+    // Unang load: i-seed ang dedupe keys ng lumang bill requests para hindi
+    // mag-replay nang isa-isa. Bagong request lang ang mag-a-alert pagkatapos.
+    _notifyPendingBillRequests(orders, seedOnly: !wasSeeded);
 
     setState(() {
       _orders = orders;
@@ -228,16 +230,50 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   /// I-scan ang buong order queue at mag-notify para sa bawat session na may
   /// pending bill request. Dedupe ang service, kaya safe itong tawagin sa
   /// bawat refresh/back/tab switch.
-  void _notifyPendingBillRequests(Iterable<AdminOrder> orders) {
+  void _notifyPendingBillRequests(
+    Iterable<AdminOrder> orders, {
+    bool seedOnly = false,
+  }) {
+    final Set<int> countedTickets = <int>{};
+    int pendingCount = 0;
+
     for (final AdminOrder order in orders) {
       if (!order.hasPendingBillRequest) continue;
-      AudioNotificationService.showAdminBillRequestedBanner(
-        tableNumber: order.tableNumber,
-        sessionId: order.sessionId,
-        orderId: order.id,
-        parentOrderId: order.parentOrderId,
-        billRequestedAt: order.billRequestedAt,
-        grandTotal: order.totalAmount.toStringAsFixed(2),
+
+      final int ticketRoot = order.parentOrderId != null &&
+              order.parentOrderId! > 0
+          ? order.parentOrderId!
+          : order.id;
+      if (countedTickets.add(ticketRoot)) pendingCount++;
+
+      if (seedOnly) {
+        // Record lang ang dedupe key — walang banner, walang tunog.
+        AudioNotificationService.seedAdminBillRequested(
+          tableNumber: order.tableNumber,
+          sessionId: order.sessionId,
+          orderId: order.id,
+          parentOrderId: order.parentOrderId,
+          billRequestedAt: order.billRequestedAt,
+        );
+      } else {
+        AudioNotificationService.showAdminBillRequestedBanner(
+          tableNumber: order.tableNumber,
+          sessionId: order.sessionId,
+          orderId: order.id,
+          parentOrderId: order.parentOrderId,
+          billRequestedAt: order.billRequestedAt,
+          grandTotal: order.totalAmount.toStringAsFixed(2),
+        );
+      }
+    }
+
+    if (seedOnly && pendingCount > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$pendingCount bill request(s) pending.'),
+          backgroundColor: AdminTheme.warningFg,
+          duration: const Duration(seconds: 4),
+        ),
       );
     }
   }
@@ -419,6 +455,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               _socketService.disconnect();
               UserSession.clearSession();
               AdminService.staffAuthToken = null;
+              _orderIdsSeeded = false;
+              _lowStockSeeded = false;
               if (!mounted) return;
               Navigator.pushAndRemoveUntil(
                 context,

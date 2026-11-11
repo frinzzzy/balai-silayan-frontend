@@ -353,7 +353,8 @@ class AudioNotificationService {
         .toList();
     _pendingBanners.clear();
     for (final entry in entries) {
-      if (!NotificationCenter.instance.shouldNotify(entry.key)) continue;
+      // Naka-queue na ito — huwag nang i-check ang dedupe dahil naka-record na
+      // ang key noong na-queue. Kung i-check pa, hindi na ito lalabas.
       // I-replay ito pinaagi ng _presentBanner para hindi mawawala ang sound +
       // notification history (kung direktang NotificationCenter.instance.show lang).
       _presentBanner(
@@ -419,6 +420,55 @@ class AudioNotificationService {
     return true;
   }
 
+  /// Dedupe key para sa admin bill request alert.
+  /// Isang alert lang per root ticket — kahit parent at child tickets ang
+  /// mag-request ng bill sa parehong oras.
+  static String _adminBillDedupeKey({
+    required int tableNumber,
+    int? sessionId,
+    int? orderId,
+    int? parentOrderId,
+    DateTime? billRequestedAt,
+  }) {
+    final String requestStamp = billRequestedAt != null
+        ? billRequestedAt.toUtc().toIso8601String().substring(0, 19)
+        : 'no_timestamp';
+    final String sessionKey = sessionId != null && sessionId > 0
+        ? 'session_$sessionId'
+        : 'table_$tableNumber';
+    final int? rootOrderId = parentOrderId != null && parentOrderId > 0
+        ? parentOrderId
+        : orderId;
+    final String ticketKey = rootOrderId != null && rootOrderId > 0
+        ? 'order_$rootOrderId'
+        : 'order_any';
+    return 'admin_bill|$sessionKey|$ticketKey|$requestStamp';
+  }
+
+  /// I-record lang ang dedupe key ng isang pending bill request nang WALANG
+  /// banner o tunog. Gamit ito sa unang load/login para hindi mag-replay nang
+  /// isa-isa ang lahat ng lumang requests; ang mga bagong request lang ang
+  /// mag-a-alert pagkatapos.
+  static void seedAdminBillRequested({
+    required int tableNumber,
+    int? sessionId,
+    int? orderId,
+    int? parentOrderId,
+    DateTime? billRequestedAt,
+  }) {
+    final String dedupeKey = _adminBillDedupeKey(
+      tableNumber: tableNumber,
+      sessionId: sessionId,
+      orderId: orderId,
+      parentOrderId: parentOrderId,
+      billRequestedAt: billRequestedAt,
+    );
+    NotificationCenter.instance.shouldNotify(
+      dedupeKey,
+      ttl: const Duration(hours: 24),
+    );
+  }
+
   /// Banner para sa admin kapag may customer na nag-request ng bill.
   /// Dedupe key: `admin_bill|sessionId|billRequestedAt` — kaya refresh, back,
   /// o tab switch ay hindi nagdodoble ng notification para sa parehong request.
@@ -431,21 +481,16 @@ class AudioNotificationService {
     dynamic grandTotal,
     String? customerName,
   }) {
-    final String requestStamp = billRequestedAt != null
-        ? billRequestedAt.toUtc().toIso8601String().substring(0, 19)
-        : 'no_timestamp';
-    final String sessionKey = sessionId != null && sessionId > 0
-        ? 'session_$sessionId'
-        : 'table_$tableNumber';
-    // Isang alert lang per root ticket — kahit parent at child tickets ang
-    // mag-request ng bill sa parehong oras.
+    final String dedupeKey = _adminBillDedupeKey(
+      tableNumber: tableNumber,
+      sessionId: sessionId,
+      orderId: orderId,
+      parentOrderId: parentOrderId,
+      billRequestedAt: billRequestedAt,
+    );
     final int? rootOrderId = parentOrderId != null && parentOrderId > 0
         ? parentOrderId
         : orderId;
-    final String ticketKey = rootOrderId != null && rootOrderId > 0
-        ? 'order_$rootOrderId'
-        : 'order_any';
-    final String dedupeKey = 'admin_bill|$sessionKey|$ticketKey|$requestStamp';
     // Mahabang TTL: ang isang bill request ay dapat minsan lang ma-alert sa
     // buong shift, kahit maraming refresh/tab switch ang admin.
     if (!NotificationCenter.instance.shouldNotify(
@@ -652,11 +697,9 @@ class AudioNotificationService {
           _pendingBanners.remove(_pendingBanners.keys.first);
         }
         _pendingBanners[queueKey] = payload;
-        // Hindi pa naipakita -> ibalik ang dedupe slot para makalabas ito
-        // kapag nag-flush sa resume.
-        if (dedupeKey != null) {
-          NotificationCenter.instance.forget(dedupeKey);
-        }
+        // Huwag i-forget ang dedupe key. Kung i-forget ito, muling papasa ang
+        // shouldNotify sa susunod na poll at magiging infinite ang notif.
+        // Naka-queue na ang banner at doon ito lalabas pag-resume.
       }
       return;
     }

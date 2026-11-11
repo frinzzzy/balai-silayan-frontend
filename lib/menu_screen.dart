@@ -301,9 +301,35 @@ class _MenuScreenState extends State<MenuScreen> {
               : <String, dynamic>{};
       final List orders = data['orders'] is List ? data['orders'] : [];
 
+      // Kung ibang session ang ibinalik ng backend (hal. luma/closed), huwag
+      // i-overwrite ang flags ng kasalukuyang session ng customer.
+      final int? responseSessionId = int.tryParse(
+        (data['session_id'] ?? '').toString(),
+      );
+      final int? currentSessionId =
+          UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      if (responseSessionId != null &&
+          currentSessionId != null &&
+          responseSessionId != currentSessionId) {
+        return;
+      }
+
+      const Set<String> terminalStatuses = <String>{
+        'PAID',
+        'COMPLETED',
+        'CLOSED',
+        'SETTLED',
+        'CANCELLED',
+        'DECLINED',
+        'REJECTED',
+      };
+
       UserSession.clearAllBillRequests();
       for (final dynamic raw in orders) {
         if (raw is! Map) continue;
+        final String status =
+            (raw['status'] ?? raw['order_status'] ?? '').toString().toUpperCase();
+        if (terminalStatuses.contains(status)) continue;
         final dynamic orderId = raw['order_id'] ?? raw['id'];
         final dynamic requestedAt = raw['bill_requested_at'];
         if (requestedAt != null) {
