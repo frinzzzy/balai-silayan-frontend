@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+
+import 'dart:async';
+
 import 'screens/admin/models/admin_order_model.dart';
 import 'screens/admin/services/admin_service.dart';
 import 'screens/admin/screens/order_queue_screen.dart';
@@ -11,7 +14,9 @@ import 'theme/app_theme.dart';
 import 'theme/admin_tokens.dart';
 import 'widgets/skeleton.dart';
 import 'config/api_config.dart';
+
 import 'package:http/http.dart' as http;
+
 import 'dart:convert';
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -26,7 +31,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final SocketService _socketService = SocketService();
 
   // 🔑 GlobalKey para direktang tawagin ang pag-refresh ng stock screen
-  final GlobalKey<StockManagementScreenState> _stockScreenKey = GlobalKey<StockManagementScreenState>();
+  final GlobalKey<StockManagementScreenState> _stockScreenKey =
+      GlobalKey<StockManagementScreenState>();
 
   bool _isLoggedIn = false;
   final bool _isApiConnected = true; // Locked to production API
@@ -34,8 +40,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   bool _isLoading = false;
   bool _isLoggingIn = false;
 
-  final TextEditingController _usernameController = TextEditingController(text: 'admin');
-  final TextEditingController _passwordController = TextEditingController(text: 'admin123');
+  // Notification tracking para hindi mag-spam: seed sa unang load, tapos
+  // i-notify lang ang mga bagong ticket/stock na lumitaw pagkatapos.
+  final Set<int> _knownOrderIds = <int>{};
+  bool _orderIdsSeeded = false;
+  final Set<String> _lowStockItemIds = <String>{};
+  bool _lowStockSeeded = false;
+  bool _lowStockCheckInFlight = false;
+  Timer? _pollTimer;
+  Timer? _lowStockDebounce;
+
+  final TextEditingController _usernameController = TextEditingController(
+    text: 'admin',
+  );
+  final TextEditingController _passwordController = TextEditingController(
+    text: 'admin123',
+  );
 
   List<AdminOrder> _orders = [];
   DailySalesStats _salesStats = DailySalesStats(
@@ -56,6 +76,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
+    _lowStockDebounce?.cancel();
     _socketService.disconnect();
     _usernameController.dispose();
     _passwordController.dispose();
@@ -65,6 +87,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   void _initSocketSync() {
     _socketService.connect(
       joinAdminRooms: true,
+      onNewOrder: (_) => _loadDashboardData(silent: true),
       onOrderUpdated: (_) => _loadDashboardData(silent: true),
       onStatusUpdated: (_) => _loadDashboardData(silent: true),
       onSessionClosed: (_) => _loadDashboardData(silent: true),
@@ -72,8 +95,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       onStockUpdated: (_) {
         _loadDashboardData(silent: true);
         _stockScreenKey.currentState?.loadInventorySilently();
+        _scheduleLowStockCheck();
       },
     );
+    _startPollingFallback();
+  }
+
+  /// Backup kapag natigil/disconnected ang socket — regular refresh para hindi
+  /// mawala ang new-order at bill-request alerts.
+  void _startPollingFallback() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+      if (!mounted || !_isLoggedIn) return;
+      _loadDashboardData(silent: true);
+    });
+  }
+
+  void _scheduleLowStockCheck() {
+    _lowStockDebounce?.cancel();
+    _lowStockDebounce = Timer(const Duration(milliseconds: 1200), () {
+      _checkLowStock();
+    });
   }
 
   Future<void> _loadDashboardData({bool silent = false}) async {
@@ -81,15 +123,105 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (!silent && _orders.isEmpty) {
       setState(() => _isLoading = true);
     }
-    final orders = await _adminService.fetchOrdersQueue(isApiConnected: _isApiConnected);
-    final stats = await _adminService.fetchDailySalesAnalytics(isApiConnected: _isApiConnected);
-    if (mounted) {
-      setState(() {
-        _orders = orders;
-        _salesStats = stats;
-        _isLoading = false;
-      });
-      _notifyPendingBillRequests(orders);
+    final orders = await _adminService.fetchOrdersQueue(
+      isApiConnected: _isApiConnected,
+    );
+    final stats = await _adminService.fetchDailySalesAnalytics(
+      isApiConnected: _isApiConnected,
+    );
+    if (!mounted) return;
+
+    final bool wasSeeded = _orderIdsSeeded;
+    final List<AdminOrder> newOrders = <AdminOrder>[];
+    if (wasSeeded) {
+      for (final AdminOrder order in orders) {
+        if (!_knownOrderIds.contains(order.id)) newOrders.add(order);
+      }
+    }
+    _knownOrderIds
+      ..clear()
+      ..addAll(orders.map((o) => o.id));
+    _orderIdsSeeded = true;
+
+    // Notify bago ang setState para kasama agad sa rebuild ang unread badge.
+    if (wasSeeded && newOrders.isNotEmpty) {
+      _notifyNewOrders(newOrders);
+    }
+    _notifyPendingBillRequests(orders);
+
+    setState(() {
+      _orders = orders;
+      _salesStats = stats;
+      _isLoading = false;
+    });
+
+    if (!wasSeeded) {
+      // Unang load: i-seed ang low-stock baseline nang walang alert spam.
+      await _checkLowStock(seedOnly: !_lowStockSeeded);
+    }
+  }
+
+  void _notifyNewOrders(Iterable<AdminOrder> orders) {
+    for (final AdminOrder order in orders) {
+      AudioNotificationService.showAdminNewOrderBanner(
+        tableNumber: order.tableNumber,
+        orderId: order.id,
+        parentOrderId: order.parentOrderId,
+        isAdditional: order.isAdditional,
+        itemsSummary: order.itemsDescription,
+        totalAmount: order.totalAmount.toStringAsFixed(2),
+      );
+    }
+  }
+
+  Future<void> _checkLowStock({bool seedOnly = false}) async {
+    if (_lowStockCheckInFlight) return;
+    _lowStockCheckInFlight = true;
+    try {
+      final List<Map<String, dynamic>> inventory = await _adminService
+          .fetchMenuInventory();
+      if (!mounted || inventory.isEmpty) return;
+
+      final Set<String> currentLowIds = <String>{};
+      final List<Map<String, dynamic>> newlyLow = <Map<String, dynamic>>[];
+
+      for (final Map<String, dynamic> item in inventory) {
+        final int stock =
+            int.tryParse(
+              (item['stock_quantity'] ?? item['stock'] ?? 0).toString(),
+            ) ??
+            0;
+        final int threshold =
+            int.tryParse((item['low_stock_threshold'] ?? 10).toString()) ?? 10;
+        if (stock > threshold) continue;
+
+        final String key =
+            (item['id'] ?? item['item_name'] ?? item['name'] ?? '').toString();
+        if (key.isEmpty) continue;
+        currentLowIds.add(key);
+
+        final bool isNewLow =
+            _lowStockSeeded && !_lowStockItemIds.contains(key);
+        if (!seedOnly && isNewLow) {
+          newlyLow.add(<String, dynamic>{
+            'id': item['id'],
+            'name': item['name'] ?? item['item_name'] ?? 'Item',
+            'stock': stock,
+          });
+        }
+      }
+
+      _lowStockItemIds
+        ..clear()
+        ..addAll(currentLowIds);
+      _lowStockSeeded = true;
+
+      if (!seedOnly && newlyLow.isNotEmpty) {
+        AudioNotificationService.showAdminLowStockBanner(items: newlyLow);
+        if (mounted) setState(() {});
+      }
+    } finally {
+      _lowStockCheckInFlight = false;
     }
   }
 
@@ -103,6 +235,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         tableNumber: order.tableNumber,
         sessionId: order.sessionId,
         orderId: order.id,
+        parentOrderId: order.parentOrderId,
         billRequestedAt: order.billRequestedAt,
         grandTotal: order.totalAmount.toStringAsFixed(2),
       );
@@ -117,9 +250,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       final int? rawTableNumber = int.tryParse(
         (data['table_number'] ?? '').toString(),
       );
-      final int? rawTableId = int.tryParse(
-        (data['table_id'] ?? '').toString(),
-      );
+      final int? rawTableId = int.tryParse((data['table_id'] ?? '').toString());
       final int? sessionId = int.tryParse(
         (data['session_id'] ?? '').toString(),
       );
@@ -148,19 +279,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           : null;
       final dynamic rawTotal =
           data['grand_total'] ?? data['total_amount'] ?? data['amount'];
-      final double? total =
-          rawTotal != null ? double.tryParse(rawTotal.toString()) : null;
+      final double? total = rawTotal != null
+          ? double.tryParse(rawTotal.toString())
+          : null;
 
       if (tableNumber != null && tableNumber > 0) {
         final int? orderId = int.tryParse(
           (data['order_id'] ?? data['ticket_order_id'] ?? '').toString(),
         );
+        int? parentOrderId = int.tryParse(
+          (data['parent_order_id'] ?? '').toString(),
+        );
+        // Kung wala sa payload, hanapin sa kasalukuyang queue para ma-group
+        // ang alert sa root ticket.
+        if (parentOrderId == null && orderId != null) {
+          for (final AdminOrder order in _orders) {
+            if (order.id == orderId) {
+              parentOrderId = order.parentOrderId;
+              break;
+            }
+          }
+        }
         AudioNotificationService.showAdminBillRequestedBanner(
           tableNumber: tableNumber,
           sessionId: sessionId,
           orderId: orderId,
+          parentOrderId: parentOrderId,
           billRequestedAt: requestedAt,
-          grandTotal: total != null ? total.toStringAsFixed(2) : null,
+          grandTotal: total?.toStringAsFixed(2),
         );
       }
     }
@@ -174,7 +320,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     if (username.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter employee ID and password.'), backgroundColor: AppTheme.errorRust),
+        const SnackBar(
+          content: Text('Please enter employee ID and password.'),
+          backgroundColor: AppTheme.errorRust,
+        ),
       );
       return;
     }
@@ -193,7 +342,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
-        final token = resData['token'] ?? resData['data']?['token'] ?? resData['access_token'];
+        final token =
+            resData['token'] ??
+            resData['data']?['token'] ??
+            resData['access_token'];
         UserSession.authToken = token;
         AdminService.staffAuthToken = token;
         AdminService.staffName = username;
@@ -205,13 +357,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         _initSocketSync();
 
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Login Successful! Welcome to Admin Portal.'), backgroundColor: AdminTheme.textDark),
+          const SnackBar(
+            content: Text('Login Successful! Welcome to Admin Portal.'),
+            backgroundColor: AdminTheme.textDark,
+          ),
         );
         return;
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Invalid credentials. Please try again.'), backgroundColor: AppTheme.errorRust),
+            const SnackBar(
+              content: Text('Invalid credentials. Please try again.'),
+              backgroundColor: AppTheme.errorRust,
+            ),
           );
         }
       }
@@ -219,7 +377,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       if (mounted) {
         setState(() => _isLoggingIn = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Login connection error: $e'), backgroundColor: AppTheme.errorRust),
+          SnackBar(
+            content: Text('Login connection error: $e'),
+            backgroundColor: AppTheme.errorRust,
+          ),
         );
       }
     }
@@ -231,15 +392,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AdminTheme.surfaceIvory,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Confirm Logout', style: TextStyle(fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
-        content: const Text('Are you sure you want to log out from the admin portal?'),
+        title: const Text(
+          'Confirm Logout',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: AdminTheme.textDark,
+          ),
+        ),
+        content: const Text(
+          'Are you sure you want to log out from the admin portal?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: AdminTheme.mutedGray)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AdminTheme.mutedGray),
+            ),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+            ),
             onPressed: () {
               Navigator.pop(ctx);
               _socketService.disconnect();
@@ -248,11 +422,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               if (!mounted) return;
               Navigator.pushAndRemoveUntil(
                 context,
-                MaterialPageRoute(builder: (context) => const AdminDashboardScreen()),
+                MaterialPageRoute(
+                  builder: (context) => const AdminDashboardScreen(),
+                ),
                 (route) => false,
               );
             },
-            child: const Text('Log Out', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            child: const Text(
+              'Log Out',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
       ),
@@ -267,17 +449,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(ok
-            ? 'Ordering reopened for order #$orderId.'
-            : 'Could not reopen ordering. Please try again.'),
-        backgroundColor:
-            ok ? const Color(0xFF203F35) : const Color(0xFF8E5136),
+        content: Text(
+          ok
+              ? 'Ordering reopened for order #$orderId.'
+              : 'Could not reopen ordering. Please try again.',
+        ),
+        backgroundColor: ok ? const Color(0xFF203F35) : const Color(0xFF8E5136),
       ),
     );
     if (ok) _loadDashboardData(silent: true);
   }
 
-  void _handleActionTriggered(int orderId, String targetStatus, {String? paymentMethod, String? declineReason}) {
+  void _handleActionTriggered(
+    int orderId,
+    String targetStatus, {
+    String? paymentMethod,
+    String? declineReason,
+  }) {
     final String timeNow = '${TimeOfDay.now().format(context)} • Today';
     setState(() {
       final index = _orders.indexWhere((o) => o.id == orderId);
@@ -290,7 +478,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       }
     });
 
-    final currentOrder = _orders.firstWhere((o) => o.id == orderId, orElse: () => AdminOrder(id: orderId, tableNumber: 1, itemsDescription: '', totalAmount: 0, status: targetStatus, paymentMethod: 'UNPAID', updatedAt: ''));
+    final currentOrder = _orders.firstWhere(
+      (o) => o.id == orderId,
+      orElse: () => AdminOrder(
+        id: orderId,
+        tableNumber: 1,
+        itemsDescription: '',
+        totalAmount: 0,
+        status: targetStatus,
+        paymentMethod: 'UNPAID',
+        updatedAt: '',
+      ),
+    );
     if (targetStatus == 'PAID') {
       _adminService.processPayment(
         orderId: orderId,
@@ -356,8 +555,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         _currentTabIndex == 0
                             ? 'ORDER QUEUE'
                             : _currentTabIndex == 1
-                                ? 'SALES ANALYTICS'
-                                : 'STOCK MANAGEMENT',
+                            ? 'SALES ANALYTICS'
+                            : 'STOCK MANAGEMENT',
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 9,
@@ -372,12 +571,66 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ],
             ),
             actions: [
+              Builder(
+                builder: (context) {
+                  final int unread =
+                      AudioNotificationService.unseenHistoryCount;
+                  return IconButton(
+                    tooltip: 'Notification history',
+                    onPressed: () {
+                      AudioNotificationService.showNotificationHistory(context);
+                      // markHistorySeen() ay kasama sa showNotificationHistory.
+                      setState(() {});
+                    },
+                    icon: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        const Icon(
+                          Icons.notifications_outlined,
+                          color: Colors.white,
+                        ),
+                        if (unread > 0)
+                          Positioned(
+                            right: -6,
+                            top: -5,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFEF4444),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: AdminTheme.deepGreen,
+                                  width: 1.5,
+                                ),
+                              ),
+                              constraints: const BoxConstraints(minWidth: 17),
+                              child: Text(
+                                unread > 99 ? '99+' : '$unread',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Icon(
                   Icons.circle,
                   size: 10,
-                  color: _isApiConnected ? AdminTheme.successFg : AdminTheme.danger,
+                  color: _isApiConnected
+                      ? AdminTheme.successFg
+                      : AdminTheme.danger,
                 ),
               ),
               IconButton(
@@ -395,42 +648,52 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _isLoading
                     ? _buildLoadingSkeleton()
                     : IndexedStack(
-                  index: _currentTabIndex,
-                  children: [
-                    OrderQueueScreen(
-                      orders: _orders,
-                      onActionTriggered: _handleActionTriggered,
-                      onReopenBill: _handleReopenBill,
-                      onRefresh: _loadDashboardData,
-                      stats: _salesStats,
-                    ),
-                    SalesAnalyticsScreen(
-                      stats: _salesStats,
-                      orders: _orders,
-                      onRefresh: _loadDashboardData,
-                    ),
-                    StockManagementScreen(
-                      key: _stockScreenKey,
-                      onRefresh: _loadDashboardData,
-                    ),
-                  ],
-                ),
+                        index: _currentTabIndex,
+                        children: [
+                          OrderQueueScreen(
+                            orders: _orders,
+                            onActionTriggered: _handleActionTriggered,
+                            onReopenBill: _handleReopenBill,
+                            onRefresh: _loadDashboardData,
+                            stats: _salesStats,
+                          ),
+                          SalesAnalyticsScreen(
+                            stats: _salesStats,
+                            orders: _orders,
+                            onRefresh: _loadDashboardData,
+                          ),
+                          StockManagementScreen(
+                            key: _stockScreenKey,
+                            onRefresh: _loadDashboardData,
+                          ),
+                        ],
+                      ),
               ),
             ],
           ),
           bottomNavigationBar: isDesktop
               ? null
               : NavigationBar(
-            backgroundColor: AdminTheme.deepGreen,
-            indicatorColor: AdminTheme.goldAccent,
-            selectedIndex: _currentTabIndex,
-            onDestinationSelected: (idx) => setState(() => _currentTabIndex = idx),
-            destinations: [
-              NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Order Queue'),
-              NavigationDestination(icon: Icon(Icons.analytics_outlined), label: 'Sales Analytics'),
-              NavigationDestination(icon: Icon(Icons.inventory_2_outlined), label: 'Stock Mgmt'),
-            ],
-          ),
+                  backgroundColor: AdminTheme.deepGreen,
+                  indicatorColor: AdminTheme.goldAccent,
+                  selectedIndex: _currentTabIndex,
+                  onDestinationSelected: (idx) =>
+                      setState(() => _currentTabIndex = idx),
+                  destinations: [
+                    NavigationDestination(
+                      icon: Icon(Icons.receipt_long_outlined),
+                      label: 'Order Queue',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.analytics_outlined),
+                      label: 'Sales Analytics',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.inventory_2_outlined),
+                      label: 'Stock Mgmt',
+                    ),
+                  ],
+                ),
         );
       },
     );
@@ -459,7 +722,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(child: Skeleton(width: 140, height: 14, radius: 7)),
-              SizedBox(width: 60, child: Skeleton(width: 70, height: 24, radius: 12)),
+              SizedBox(
+                width: 60,
+                child: Skeleton(width: 70, height: 24, radius: 12),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -467,7 +733,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(child: Skeleton(width: 180, height: 18, radius: 9)),
-              SizedBox(width: 60, child: Skeleton(width: 60, height: 18, radius: 9)),
+              SizedBox(
+                width: 60,
+                child: Skeleton(width: 60, height: 18, radius: 9),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -480,8 +749,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Widget _buildSidebarNav() {
     final navItems = [
       {'index': 0, 'icon': Icons.receipt_long_outlined, 'label': 'Order queue'},
-      {'index': 1, 'icon': Icons.analytics_outlined, 'label': 'Sales analytics'},
-      {'index': 2, 'icon': Icons.inventory_2_outlined, 'label': 'Stock management'},
+      {
+        'index': 1,
+        'icon': Icons.analytics_outlined,
+        'label': 'Sales analytics',
+      },
+      {
+        'index': 2,
+        'icon': Icons.inventory_2_outlined,
+        'label': 'Stock management',
+      },
     ];
 
     return Container(
@@ -543,19 +820,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 onTap: () => setState(() => _currentTabIndex = idx),
                 borderRadius: BorderRadius.circular(12),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
-                    color: isSelected ? AdminTheme.deepGreenSelected : Colors.transparent,
+                    color: isSelected
+                        ? AdminTheme.deepGreenSelected
+                        : Colors.transparent,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: isSelected ? AdminTokens.gold.withValues(alpha: 0.35) : Colors.transparent,
+                      color: isSelected
+                          ? AdminTokens.gold.withValues(alpha: 0.35)
+                          : Colors.transparent,
                     ),
                   ),
                   child: Row(
                     children: [
                       Icon(
                         item['icon'] as IconData,
-                        color: isSelected ? AdminTheme.goldAccent : Colors.white70,
+                        color: isSelected
+                            ? AdminTheme.goldAccent
+                            : Colors.white70,
                         size: 18,
                       ),
                       const SizedBox(width: 12),
@@ -563,7 +849,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         item['label'] as String,
                         style: TextStyle(
                           fontSize: 13,
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                          fontWeight: isSelected
+                              ? FontWeight.bold
+                              : FontWeight.w500,
                           color: isSelected ? Colors.white : Colors.white70,
                         ),
                       ),
@@ -583,7 +871,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   backgroundColor: AdminTheme.deepGreenSelected,
                   child: Text(
                     'A',
-                    style: TextStyle(color: AdminTheme.goldAccent, fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      color: AdminTheme.goldAccent,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -591,14 +882,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Admin Staff', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13)),
-                      Text('Restaurant Management', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 11)),
+                      Text(
+                        'Admin Staff',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          fontSize: 13,
+                        ),
+                      ),
+                      Text(
+                        'Restaurant Management',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          fontSize: 11,
+                        ),
+                      ),
                     ],
                   ),
                 ),
                 IconButton(
                   onPressed: _handleLogout,
-                  icon: const Icon(Icons.logout_rounded, size: 18, color: Colors.white60),
+                  icon: const Icon(
+                    Icons.logout_rounded,
+                    size: 18,
+                    color: Colors.white60,
+                  ),
                 ),
               ],
             ),
@@ -662,7 +970,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 const Text(
                   'Balai Silayan',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 22, fontWeight: FontWeight.bold, color: AdminTheme.textDark),
+                  style: TextStyle(
+                    fontFamily: 'Libre Baskerville',
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: AdminTheme.textDark,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 const Text(
@@ -675,8 +988,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   controller: _usernameController,
                   decoration: InputDecoration(
                     labelText: 'Employee ID / Username',
-                    prefixIcon: const Icon(Icons.person_outline, color: AdminTheme.textDark),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(
+                      Icons.person_outline,
+                      color: AdminTheme.textDark,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -685,8 +1003,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   obscureText: true,
                   decoration: InputDecoration(
                     labelText: 'Access Passcode',
-                    prefixIcon: const Icon(Icons.lock_outline, color: AdminTheme.textDark),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(
+                      Icons.lock_outline,
+                      color: AdminTheme.textDark,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 28),
@@ -695,15 +1018,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AdminTheme.textDark,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     onPressed: _isLoggingIn ? null : _handleLogin,
                     child: _isLoggingIn
                         ? const CircularProgressIndicator(color: Colors.white)
                         : const Text(
-                      'Access Dashboard',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
+                            'Access Dashboard',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
                   ),
                 ),
               ],

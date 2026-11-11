@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+
 import '../models/user_session.dart';
 import '../config/api_config.dart';
 
@@ -7,6 +8,8 @@ class SocketService with WidgetsBindingObserver {
   late io.Socket _socket;
   bool _isConnected = false;
   bool _joinAdminRooms = false;
+  bool _initialized = false;
+  bool _observerRegistered = false;
 
   String get _baseUrl => ApiConfig.baseUrl;
 
@@ -21,7 +24,11 @@ class SocketService with WidgetsBindingObserver {
   /// ticket formats (hal. int 12, '12', '#BS-0012', at 'BS-12' ay lahat ay '12').
   static String normalizeOrderId(dynamic orderId) {
     if (orderId == null) return '';
-    final String stripped = orderId.toString().trim().replaceAll(RegExp(r'^#?BS-?', caseSensitive: false), '').trim();
+    final String stripped = orderId
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'^#?BS-?', caseSensitive: false), '')
+        .trim();
     final int? parsed = int.tryParse(stripped);
     if (parsed != null) {
       return parsed.toString();
@@ -45,14 +52,20 @@ class SocketService with WidgetsBindingObserver {
 
   void connect({
     Function(dynamic)? onOrderUpdated,
+    Function(dynamic)? onNewOrder,
     Function(dynamic)? onStatusUpdated,
     Function(dynamic)? onSessionClosed,
     Function(dynamic)? onStockUpdated,
     Function(dynamic)? onBillRequested,
     bool joinAdminRooms = false,
   }) {
+    if (_initialized) return;
+    _initialized = true;
     _joinAdminRooms = joinAdminRooms;
-    WidgetsBinding.instance.addObserver(this);
+    if (!_observerRegistered) {
+      WidgetsBinding.instance.addObserver(this);
+      _observerRegistered = true;
+    }
     try {
       _socket = io.io(
         _socketUrl,
@@ -68,7 +81,9 @@ class SocketService with WidgetsBindingObserver {
 
       _socket.onConnect((_) {
         _isConnected = true;
-        debugPrint('⚡ [SocketService] Connected successfully to $_baseUrl (ID: ${_socket.id})');
+        debugPrint(
+          '⚡ [SocketService] Connected successfully to $_baseUrl (ID: ${_socket.id})',
+        );
         _rejoinRooms();
       });
 
@@ -83,7 +98,9 @@ class SocketService with WidgetsBindingObserver {
 
       _socket.onReconnect((attempt) {
         _isConnected = true;
-        debugPrint('🔄 [SocketService] Reconnected successfully on attempt #$attempt');
+        debugPrint(
+          '🔄 [SocketService] Reconnected successfully on attempt #$attempt',
+        );
         _rejoinRooms();
       });
 
@@ -93,13 +110,24 @@ class SocketService with WidgetsBindingObserver {
 
       _socket.onDisconnect((reason) {
         _isConnected = false;
-        debugPrint('🔌 [SocketService] Disconnected from server. Reason: $reason');
+        debugPrint(
+          '🔌 [SocketService] Disconnected from server. Reason: $reason',
+        );
       });
 
+      if (onNewOrder != null) {
+        _socket.on('order_updated', (data) => onNewOrder(data));
+        _socket.on('new_order', (data) => onNewOrder(data));
+      }
+
       if (onOrderUpdated != null) {
-        _socket.on('order_updated', (data) => onOrderUpdated(data));
         _socket.on('additional_items_added', (data) => onOrderUpdated(data));
-        _socket.on('new_order', (data) => onOrderUpdated(data));
+        if (onNewOrder == null) {
+          // Backward compatible: kung walang dedicated new-order handler,
+          // refresh pa rin sa order creation.
+          _socket.on('order_updated', (data) => onOrderUpdated(data));
+          _socket.on('new_order', (data) => onOrderUpdated(data));
+        }
       }
 
       if (onStatusUpdated != null) {
@@ -127,6 +155,7 @@ class SocketService with WidgetsBindingObserver {
 
       _socket.connect();
     } catch (e) {
+      _initialized = false;
       debugPrint('❌ [SocketService] Initialization exception: $e');
     }
   }
@@ -148,11 +177,14 @@ class SocketService with WidgetsBindingObserver {
 
   void _rejoinRooms() {
     try {
-      final int? tableId = UserSession.activeTableId ?? UserSession.activeTableNumber;
+      final int? tableId =
+          UserSession.activeTableId ?? UserSession.activeTableNumber;
       if (tableId != null) {
         joinTableRoom(tableId);
       }
-      final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      final int? sessionId =
+          UserSession.activeSessionId ??
+          int.tryParse(UserSession.sessionId ?? '');
       if (sessionId != null) {
         joinSessionRoom(sessionId);
       }
@@ -206,21 +238,30 @@ class SocketService with WidgetsBindingObserver {
 
   void disconnect() {
     try {
-      WidgetsBinding.instance.removeObserver(this);
+      if (_observerRegistered) {
+        WidgetsBinding.instance.removeObserver(this);
+        _observerRegistered = false;
+      }
       if (_joinAdminRooms) {
         leaveRoom('admin_live_monitoring');
         leaveRoom('kitchen_monitoring');
       }
-      final int? tableId = UserSession.activeTableId ?? UserSession.activeTableNumber;
+      final int? tableId =
+          UserSession.activeTableId ?? UserSession.activeTableNumber;
       if (tableId != null) {
         leaveRoom('table_$tableId');
       }
-      final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      final int? sessionId =
+          UserSession.activeSessionId ??
+          int.tryParse(UserSession.sessionId ?? '');
       if (sessionId != null) {
         leaveRoom('session_$sessionId');
       }
-      _socket.disconnect();
-      _socket.dispose();
+      if (_initialized) {
+        _socket.disconnect();
+        _socket.dispose();
+      }
+      _initialized = false;
       _isConnected = false;
       debugPrint('🔌 [SocketService] Fully disconnected and cleaned up.');
     } catch (_) {}

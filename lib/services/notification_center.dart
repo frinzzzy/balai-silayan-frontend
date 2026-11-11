@@ -12,6 +12,7 @@ class NotificationPayload {
     required this.backgroundColor,
     required this.icon,
     this.duration = const Duration(seconds: 3),
+    this.groupKey,
   });
 
   final String title;
@@ -19,6 +20,9 @@ class NotificationPayload {
   final Color backgroundColor;
   final IconData icon;
   final Duration duration;
+
+  /// Optional grouping key para sa notification history.
+  final String? groupKey;
 }
 
 /// Sentral na presentation at dedupe ng lahat ng notification.
@@ -33,7 +37,8 @@ class NotificationCenter {
 
   /// Root navigator key — kailangang i-register sa `MaterialApp.navigatorKey`
   /// para makapag-insert ng overlay kahit saan.
-  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
 
   /// Fallback kung hindi pa available ang overlay (hal. sobrang aga ng event).
   static final GlobalKey<ScaffoldMessengerState> messengerKey =
@@ -68,6 +73,13 @@ class NotificationCenter {
 
   void resetDedupe() {
     _dedupe.clear();
+  }
+
+  /// Alisin ang dedupe record para sa isang key. Ginagamit kapag na-queue ang
+  /// notification habang background (hindi pa talaga naipakita) — para may
+  /// chance pang lumabas ito sa resume/flush.
+  void forget(String key) {
+    _dedupe.remove(key);
   }
 
   void show(NotificationPayload payload) {
@@ -123,7 +135,9 @@ class NotificationCenter {
       // Sobrang tagal nang walang overlay — i-drop ang banner pero itago pa rin
       // sa history (history ang bahala sa AudioNotificationService).
       _retryCount = 0;
-      final NotificationPayload? pending = _queue.isNotEmpty ? _queue.first : null;
+      final NotificationPayload? pending = _queue.isNotEmpty
+          ? _queue.first
+          : null;
       _queue.clear();
       if (pending != null) _fallbackToMessenger(pending);
       return;
@@ -222,7 +236,10 @@ class _BannerOverlayState extends State<_BannerOverlay>
               child: GestureDetector(
                 onTap: _dismiss,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
                     color: widget.payload.backgroundColor,
                     borderRadius: BorderRadius.circular(16),
@@ -242,7 +259,11 @@ class _BannerOverlayState extends State<_BannerOverlay>
                           color: Colors.white24,
                           shape: BoxShape.circle,
                         ),
-                        child: Icon(widget.payload.icon, color: Colors.white, size: 24),
+                        child: Icon(
+                          widget.payload.icon,
+                          color: Colors.white,
+                          size: 24,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(

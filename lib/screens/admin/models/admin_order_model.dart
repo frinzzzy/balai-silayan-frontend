@@ -30,16 +30,17 @@ class OrderLine {
 
   factory OrderLine.fromJson(Map<String, dynamic> json) {
     final int qty = int.tryParse(json['quantity']?.toString() ?? '1') ?? 1;
-    final double unit = double.tryParse(
-      json['unit_price']?.toString() ?? json['price']?.toString() ?? '0',
-    ) ?? 0.0;
+    final double unit =
+        double.tryParse(
+          json['unit_price']?.toString() ?? json['price']?.toString() ?? '0',
+        ) ??
+        0.0;
     final List<OrderAddon> addons = (json['addons'] is List)
         ? (json['addons'] as List)
-            .map((a) => OrderAddon.fromJson(Map<String, dynamic>.from(a)))
-            .toList()
+              .map((a) => OrderAddon.fromJson(Map<String, dynamic>.from(a)))
+              .toList()
         : <OrderAddon>[];
-    final double addonSum =
-        addons.fold(0.0, (sum, a) => sum + a.price);
+    final double addonSum = addons.fold(0.0, (sum, a) => sum + a.price);
     return OrderLine(
       name: (json['name'] ?? json['item_name'] ?? 'Dish').toString(),
       quantity: qty,
@@ -72,6 +73,8 @@ class AdminOrder {
   final DateTime? billRequestedAt;
   final List<OrderLine> items;
   final DateTime? createdAt;
+  final int? parentOrderId;
+  final bool isAdditional;
 
   AdminOrder({
     required this.id,
@@ -85,6 +88,8 @@ class AdminOrder {
     this.billRequestedAt,
     this.items = const [],
     this.createdAt,
+    this.parentOrderId,
+    this.isAdditional = false,
   });
 
   /// May nakabinbing bill request ba para sa session ng order na ito?
@@ -94,6 +99,12 @@ class AdminOrder {
       !_terminalBillStatuses.contains(status.toUpperCase());
 
   factory AdminOrder.fromJson(Map<String, dynamic> json) {
+    final int? parsedParentId = int.tryParse(
+      (json['parent_order_id'] ?? '').toString(),
+    );
+    final String orderType = (json['order_type'] ?? '')
+        .toString()
+        .toUpperCase();
     return AdminOrder(
       id: json['id'] ?? json['order_id'] ?? 100,
       tableNumber: json['table_number'] ?? json['table_id'] ?? 1,
@@ -101,13 +112,28 @@ class AdminOrder {
         (json['session_id'] ?? json['table_session_id'] ?? '').toString(),
       ),
       itemsDescription: _parseItems(json['items']),
-      totalAmount: double.tryParse(json['total_amount']?.toString() ?? '0') ?? 0.0,
-      status: (json['order_status'] ?? json['status'] ?? 'PENDING').toString().toUpperCase(),
-      paymentMethod: (json['payment_method'] ?? 'UNPAID').toString().toUpperCase(),
+      totalAmount:
+          double.tryParse(json['total_amount']?.toString() ?? '0') ?? 0.0,
+      status: (json['order_status'] ?? json['status'] ?? 'PENDING')
+          .toString()
+          .toUpperCase(),
+      paymentMethod: (json['payment_method'] ?? 'UNPAID')
+          .toString()
+          .toUpperCase(),
       updatedAt: _formatTime(json['updated_at'] ?? json['created_at']),
-      billRequestedAt: _parseDate(json['bill_requested_at'] ?? json['bill_requested'] ?? json['requested_at'] ?? json['session_bill_requested_at']),
+      billRequestedAt: _parseDate(
+        json['bill_requested_at'] ??
+            json['bill_requested'] ??
+            json['requested_at'] ??
+            json['session_bill_requested_at'],
+      ),
       items: _parseItemsList(json['items']),
       createdAt: _parseDate(json['created_at']),
+      parentOrderId: parsedParentId,
+      isAdditional:
+          orderType == 'ADDITIONAL' ||
+          (parsedParentId != null && parsedParentId > 0) ||
+          json['is_additional_order'] == true,
     );
   }
 
@@ -122,7 +148,12 @@ class AdminOrder {
 
   static String _parseItems(dynamic items) {
     if (items is List && items.isNotEmpty) {
-      return items.map((i) => '${i['quantity'] ?? 1}x ${i['name'] ?? i['item_name'] ?? 'Dish'}').join(', ');
+      return items
+          .map(
+            (i) =>
+                '${i['quantity'] ?? 1}x ${i['name'] ?? i['item_name'] ?? 'Dish'}',
+          )
+          .join(', ');
     }
     return 'Heritage Dish Selection';
   }
@@ -168,9 +199,29 @@ class TopDishItem {
 
   factory TopDishItem.fromJson(Map<String, dynamic> json) {
     return TopDishItem(
-      name: (json['name'] ?? json['item_name'] ?? json['menu_item_name'] ?? json['dish_name'] ?? 'Heritage Dish').toString(),
-      quantity: int.tryParse(json['quantity']?.toString() ?? json['total_quantity']?.toString() ?? json['orders']?.toString() ?? '0') ?? 0,
-      revenue: double.tryParse(json['revenue']?.toString() ?? json['total_revenue']?.toString() ?? json['sales']?.toString() ?? '0') ?? 0.0,
+      name:
+          (json['name'] ??
+                  json['item_name'] ??
+                  json['menu_item_name'] ??
+                  json['dish_name'] ??
+                  'Heritage Dish')
+              .toString(),
+      quantity:
+          int.tryParse(
+            json['quantity']?.toString() ??
+                json['total_quantity']?.toString() ??
+                json['orders']?.toString() ??
+                '0',
+          ) ??
+          0,
+      revenue:
+          double.tryParse(
+            json['revenue']?.toString() ??
+                json['total_revenue']?.toString() ??
+                json['sales']?.toString() ??
+                '0',
+          ) ??
+          0.0,
     );
   }
 }
@@ -190,10 +241,18 @@ class DailySalesStats {
 
   factory DailySalesStats.fromJson(Map<String, dynamic> json) {
     return DailySalesStats(
-      totalSales: double.tryParse(json['gross_sales']?.toString() ?? json['total_sales']?.toString() ?? '0') ?? 0.0,
-      totalTransactions: int.tryParse(json['total_transactions']?.toString() ?? '0') ?? 0,
+      totalSales:
+          double.tryParse(
+            json['gross_sales']?.toString() ??
+                json['total_sales']?.toString() ??
+                '0',
+          ) ??
+          0.0,
+      totalTransactions:
+          int.tryParse(json['total_transactions']?.toString() ?? '0') ?? 0,
       cashSales: double.tryParse(json['cash_sales']?.toString() ?? '0') ?? 0.0,
-      gcashSales: double.tryParse(json['gcash_sales']?.toString() ?? '0') ?? 0.0,
+      gcashSales:
+          double.tryParse(json['gcash_sales']?.toString() ?? '0') ?? 0.0,
     );
   }
 }
