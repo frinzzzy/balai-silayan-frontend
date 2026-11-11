@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/admin_order_model.dart';
 import '../services/admin_service.dart';
+import '../../../services/permission_service.dart';
+import '../../../theme/app_theme.dart';
 
 class SalesAnalyticsScreen extends StatefulWidget {
   final DailySalesStats stats;
@@ -28,6 +30,7 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
   DateTime _selectedDate = DateTime.now();
   DailySalesStats? _previousStats;
   bool _isLoading = false;
+  final ScrollController _chartScrollController = ScrollController();
 
   final NumberFormat _currencyFormat = NumberFormat.currency(locale: 'en_PH', symbol: '₱', decimalDigits: 2);
   final NumberFormat _currencyFormatInt = NumberFormat.currency(locale: 'en_PH', symbol: '₱', decimalDigits: 0);
@@ -37,6 +40,12 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
     super.initState();
     _currentStats = widget.stats;
     _fetchFilteredStats(); // ✅ Agad na kinukuha ang tamang analytics data pagka-load para sa default period[cite: 17]
+  }
+
+  @override
+  void dispose() {
+    _chartScrollController.dispose();
+    super.dispose();
   }
 
   // ✅ Live sync ng stats kapag nag-update ang background polling o socket kung 'today' ang naka-select[cite: 17]
@@ -160,9 +169,9 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
     }
 
     return Container(
-      color: const Color(0xFFF8F4EC),
+      color: AdminTheme.background,
       child: RefreshIndicator(
-        color: const Color(0xFF203F35),
+        color: AdminTheme.textDark,
         onRefresh: () async {
           widget.onRefresh();
           await _fetchFilteredStats();
@@ -182,14 +191,14 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                       fontFamily: 'Libre Baskerville',
                       fontSize: 28,
                       fontWeight: FontWeight.w400,
-                      color: Color(0xFF203F35),
+                      color: AdminTheme.textDark,
                       height: 1.3,
                     ),
                   ),
                   SizedBox(height: 8),
                   Text(
                     'Monitor daily revenue performance, transaction volumes, and best-selling menu items.',
-                    style: TextStyle(fontSize: 14, color: Color(0xFF687368), height: 1.5),
+                    style: TextStyle(fontSize: 14, color: AdminTheme.mutedDark, height: 1.5),
                   ),
                 ],
               ),
@@ -199,14 +208,14 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFDFA),
+                  color: AdminTheme.surfaceIvory,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFE5DFD3)),
+                  border: Border.all(color: AdminTheme.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('REPORTING PERIOD', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF687368))),
+                    const Text('REPORTING PERIOD', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AdminTheme.mutedDark)),
                     const SizedBox(height: 12),
                     Row(
                       children: [
@@ -214,8 +223,8 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFFFFDFA),
-                              border: Border.all(color: const Color(0xFFE5DFD3)),
+                              color: AdminTheme.surfaceIvory,
+                              border: Border.all(color: AdminTheme.border),
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: DropdownButtonHideUnderline(
@@ -223,10 +232,10 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                                 value: _selectedPeriod,
                                 isExpanded: true,
                                 items: const [
-                                  DropdownMenuItem(value: 'today', child: Text('Today', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF203F35)))),
-                                  DropdownMenuItem(value: 'monthly', child: Text('Monthly (e.g. September / February)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF203F35)))),
-                                  DropdownMenuItem(value: 'yearly', child: Text('Yearly (2026 / 2027)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF203F35)))),
-                                  DropdownMenuItem(value: 'custom', child: Text('Specific Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF203F35)))),
+                                  DropdownMenuItem(value: 'today', child: Text('Today', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AdminTheme.textDark))),
+                                  DropdownMenuItem(value: 'monthly', child: Text('Monthly (e.g. September / February)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AdminTheme.textDark))),
+                                  DropdownMenuItem(value: 'yearly', child: Text('Yearly (2026 / 2027)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AdminTheme.textDark))),
+                                  DropdownMenuItem(value: 'custom', child: Text('Specific Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AdminTheme.textDark))),
                                 ],
                                 onChanged: (val) {
                                   if (val != null) {
@@ -240,12 +249,12 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                         const SizedBox(width: 8),
                         // Navigation Arrows para lumipat ng Period / Araw / Buwan / Taon[cite: 17]
                         IconButton(
-                          icon: const Icon(Icons.chevron_left, color: Color(0xFF203F35)),
+                          icon: const Icon(Icons.chevron_left, color: AdminTheme.textDark),
                           tooltip: 'Previous',
                           onPressed: () => _navigatePeriod(-1),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.chevron_right, color: Color(0xFF203F35)),
+                          icon: const Icon(Icons.chevron_right, color: AdminTheme.textDark),
                           tooltip: 'Next',
                           onPressed: () => _navigatePeriod(1),
                         ),
@@ -255,9 +264,9 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Active Period: $periodLabel', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+                        Text('Active Period: $periodLabel', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
                         if (_isLoading)
-                          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF203F35))),
+                          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: AdminTheme.textDark)),
                       ],
                     ),
                   ],
@@ -269,9 +278,9 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF203F35),
+                  color: AdminTheme.textDark,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFF203F35)),
+                  border: Border.all(color: AdminTheme.textDark),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -302,21 +311,21 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                     child: Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFFFDFA),
+                        color: AdminTheme.surfaceIvory,
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFFE5DFD3)),
+                        border: Border.all(color: AdminTheme.border),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('Cash Collections', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                          const Text('Cash Collections', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                           const SizedBox(height: 8),
                           Text(
                             _currencyFormat.format(_currentStats.cashSales),
-                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w600, color: Color(0xFF203F35)),
+                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w600, color: AdminTheme.textDark),
                           ),
                           const SizedBox(height: 8),
-                          const Text('Counter drawer', style: TextStyle(fontSize: 12, color: Color(0xFF53766C))),
+                          const Text('Counter drawer', style: TextStyle(fontSize: 12, color: AdminTheme.successFg)),
                         ],
                       ),
                     ),
@@ -326,21 +335,21 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                     child: Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFFFDFA),
+                        color: AdminTheme.surfaceIvory,
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFFE5DFD3)),
+                        border: Border.all(color: AdminTheme.border),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('GCash Verified', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                          const Text('GCash Verified', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                           const SizedBox(height: 8),
                           Text(
                             _currencyFormat.format(_currentStats.gcashSales),
-                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w600, color: Color(0xFF203F35)),
+                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w600, color: AdminTheme.textDark),
                           ),
                           const SizedBox(height: 8),
-                          const Text('Digital gateway', style: TextStyle(fontSize: 12, color: Color(0xFF53766C))),
+                          const Text('Digital gateway', style: TextStyle(fontSize: 12, color: AdminTheme.successFg)),
                         ],
                       ),
                     ),
@@ -353,36 +362,38 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFDFA),
+                  color: AdminTheme.surfaceIvory,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFE5DFD3)),
+                  border: Border.all(color: AdminTheme.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Sales overview', style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: Color(0xFF203F35))),
+                    const Text('Sales overview', style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: AdminTheme.textDark)),
                     const SizedBox(height: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFEAF0E9),
+                        color: AdminTheme.successBg,
                         borderRadius: BorderRadius.circular(100),
                       ),
                       child: const Text(
                         'Paid transactions only',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF53766C)),
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AdminTheme.successFg),
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text('Live recognized sales summary • Philippine pesos (PHP)', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                    const Text('Live recognized sales summary • Philippine pesos (PHP)', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                     const SizedBox(height: 16),
                     SizedBox(
                       height: 210,
                       child: _chartBreakdown.isEmpty
-                          ? const Center(child: Text('No data available for this period', style: TextStyle(fontSize: 12, color: Color(0xFF687368))))
+                          ? const Center(child: Text('No data available for this period', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)))
                           : Scrollbar(
+                        controller: _chartScrollController,
                         thumbVisibility: true,
                         child: ListView.builder(
+                          controller: _chartScrollController,
                           scrollDirection: Axis.horizontal,
                           physics: const BouncingScrollPhysics(),
                           itemCount: _chartBreakdown.length,
@@ -411,32 +422,32 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFDFA),
+                  color: AdminTheme.surfaceIvory,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFE5DFD3)),
+                  border: Border.all(color: AdminTheme.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Dish performance', style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: Color(0xFF203F35))),
+                    const Text('Dish performance', style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: AdminTheme.textDark)),
                     const SizedBox(height: 6),
-                    const Text('Top ordered menu items by volume and revenue contribution.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                    const Text('Top ordered menu items by volume and revenue contribution.', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                     const SizedBox(height: 16),
                     if (_isLoading)
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 12.0),
                         child: Row(
                           children: [
-                            CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF203F35)),
+                            CircularProgressIndicator(strokeWidth: 2, color: AdminTheme.textDark),
                             SizedBox(width: 8),
-                            Text('Loading dish performance...', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                            Text('Loading dish performance...', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                           ],
                         ),
                       )
                     else if (_topDishes.isEmpty)
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 12.0),
-                        child: Text('No dish performance data available for this period.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                        child: Text('No dish performance data available for this period.', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                       )
                     else ..._topDishes.map((dish) => _buildDishPerformanceRow(dish)),
                     if (_topDishes.isNotEmpty)
@@ -444,7 +455,7 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                         padding: EdgeInsets.symmetric(vertical: 12.0),
                         child: Divider(height: 1, color: Color(0xFFE5DFD3)),
                       ),
-                    const Text('Aggregated based on successful kitchen outputs.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                    const Text('Aggregated based on successful kitchen outputs.', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                   ],
                 ),
               ),
@@ -454,22 +465,22 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFDFA),
+                  color: AdminTheme.surfaceIvory,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFE5DFD3)),
+                  border: Border.all(color: AdminTheme.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Payment mix', style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: Color(0xFF203F35))),
+                    const Text('Payment mix', style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: AdminTheme.textDark)),
                     const SizedBox(height: 6),
-                    const Text('Only payments confirmed by staff at the counter.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                    const Text('Only payments confirmed by staff at the counter.', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                     const SizedBox(height: 16),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(3),
                       child: Row(
                         children: [
-                          Expanded(flex: 7, child: Container(height: 10, color: const Color(0xFF203F35))),
+                          Expanded(flex: 7, child: Container(height: 10, color: AdminTheme.textDark)),
                           const SizedBox(width: 3),
                           Expanded(flex: 3, child: Container(height: 10, color: const Color(0xFFC3AA7F))),
                         ],
@@ -491,7 +502,7 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
                     const SizedBox(height: 4),
                     const Text(
                       'Recorded live from database payments table.',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF687368), height: 1.4),
+                      style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark, height: 1.4),
                     ),
                   ],
                 ),
@@ -502,18 +513,18 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFEAF0E9),
+                  color: AdminTheme.successBg,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.info_outline, size: 18, color: Color(0xFF53766C)),
+                    const Icon(Icons.info_outline, size: 18, color: AdminTheme.successFg),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         'Active unpaid orders total: ${_currencyFormat.format(unpaidActiveTotal)}. Ensure pending tables are settled before closing shifts.',
-                        style: const TextStyle(fontSize: 12, height: 1.5, color: Color(0xFF53766C)),
+                        style: const TextStyle(fontSize: 12, height: 1.5, color: AdminTheme.successFg),
                       ),
                     ),
                   ],
@@ -525,37 +536,45 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFDFA),
+                  color: AdminTheme.surfaceIvory,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFE5DFD3)),
+                  border: Border.all(color: AdminTheme.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Report management', style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: Color(0xFF203F35))),
+                    const Text('Report management', style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: AdminTheme.textDark)),
                     const SizedBox(height: 6),
-                    const Text('Download official daily and weekly financial logs for auditing.', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+                    const Text('Download official daily and weekly financial logs for auditing.', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
                     const SizedBox(height: 16),
                     SizedBox(
                       width: double.infinity,
                       height: 48,
                       child: OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFFFDFA),
+                          backgroundColor: AdminTheme.surfaceIvory,
                           side: const BorderSide(color: Color(0xFFE5DFD3)),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
-                        onPressed: () {
+                        onPressed: () async {
+                          final bool storageGranted = await PermissionService.requestStoragePermission();
+                          if (!context.mounted) return;
+                          if (!storageGranted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Storage permission needed to export the sales report.'), backgroundColor: AdminTheme.textDark),
+                            );
+                            return;
+                          }
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Exporting analytics report...'), backgroundColor: Color(0xFF203F35)),
+                            const SnackBar(content: Text('Exporting analytics report...'), backgroundColor: AdminTheme.textDark),
                           );
                         },
-                        icon: const Icon(Icons.download_outlined, size: 18, color: Color(0xFF687368)),
-                        label: const Text('Export report', style: TextStyle(color: Color(0xFF203F35), fontWeight: FontWeight.bold, fontSize: 14)),
+                        icon: const Icon(Icons.download_outlined, size: 18, color: AdminTheme.mutedDark),
+                        label: const Text('Export report', style: TextStyle(color: AdminTheme.textDark, fontWeight: FontWeight.bold, fontSize: 14)),
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text('Generated securely from live server records.', style: TextStyle(fontSize: 11, color: Color(0xFF687368))),
+                    const Text('Generated securely from live server records.', style: TextStyle(fontSize: 11, color: AdminTheme.mutedDark)),
                   ],
                 ),
               ),
@@ -571,18 +590,18 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
     return Column(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        Text(amount, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF53766C))),
+        Text(amount, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AdminTheme.successFg)),
         const SizedBox(height: 6),
         Container(
           width: 32,
           height: height,
           decoration: BoxDecoration(
-            color: isPeak ? const Color(0xFF203F35) : const Color(0xFF86A397),
+            color: isPeak ? AdminTheme.textDark : const Color(0xFF86A397),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
           ),
         ),
         const SizedBox(height: 8),
-        Text(day, style: const TextStyle(fontSize: 11, color: Color(0xFF687368))),
+        Text(day, style: const TextStyle(fontSize: 11, color: AdminTheme.mutedDark)),
       ],
     );
   }
@@ -605,7 +624,7 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
             ),
             Text(
               _currencyFormat.format(dish.revenue),
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF203F35)),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AdminTheme.textDark),
             ),
           ],
         ),
@@ -613,7 +632,7 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text('${dish.quantity} orders', style: const TextStyle(fontSize: 12, color: Color(0xFF687368))),
+            Text('${dish.quantity} orders', style: const TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
           ],
         ),
         const SizedBox(height: 6),
@@ -622,7 +641,7 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
           child: LinearProgressIndicator(
             value: progress,
             backgroundColor: const Color(0xFFEEE7D9),
-            color: const Color(0xFF53766C),
+            color: AdminTheme.successFg,
             minHeight: 4,
           ),
         ),
@@ -653,8 +672,8 @@ class _SalesAnalyticsScreenState extends State<SalesAnalyticsScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(fontSize: 14, color: Color(0xFF687368))),
-        Text(amount, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        Text(label, style: const TextStyle(fontSize: 14, color: AdminTheme.mutedDark)),
+        Text(amount, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
       ],
     );
   }

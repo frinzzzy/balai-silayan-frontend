@@ -1,35 +1,123 @@
+class OrderAddon {
+  final String name;
+  final double price;
+
+  const OrderAddon({required this.name, required this.price});
+
+  factory OrderAddon.fromJson(Map<String, dynamic> json) {
+    return OrderAddon(
+      name: (json['name'] ?? '').toString(),
+      price: double.tryParse(json['price']?.toString() ?? '0') ?? 0.0,
+    );
+  }
+}
+
+/// Single menu line item na naka-capture sa order (qty + unit price + addons).
+class OrderLine {
+  final String name;
+  final int quantity;
+  final double unitPrice;
+  final List<OrderAddon> addons;
+  final double lineTotal;
+
+  const OrderLine({
+    required this.name,
+    required this.quantity,
+    required this.unitPrice,
+    required this.addons,
+    required this.lineTotal,
+  });
+
+  factory OrderLine.fromJson(Map<String, dynamic> json) {
+    final int qty = int.tryParse(json['quantity']?.toString() ?? '1') ?? 1;
+    final double unit = double.tryParse(
+      json['unit_price']?.toString() ?? json['price']?.toString() ?? '0',
+    ) ?? 0.0;
+    final List<OrderAddon> addons = (json['addons'] is List)
+        ? (json['addons'] as List)
+            .map((a) => OrderAddon.fromJson(Map<String, dynamic>.from(a)))
+            .toList()
+        : <OrderAddon>[];
+    final double addonSum =
+        addons.fold(0.0, (sum, a) => sum + a.price);
+    return OrderLine(
+      name: (json['name'] ?? json['item_name'] ?? 'Dish').toString(),
+      quantity: qty,
+      unitPrice: unit,
+      addons: addons,
+      lineTotal: (unit + addonSum) * qty,
+    );
+  }
+}
+
 class AdminOrder {
+  static const Set<String> _terminalBillStatuses = <String>{
+    'PAID',
+    'COMPLETED',
+    'CLOSED',
+    'SETTLED',
+    'CANCELLED',
+    'DECLINED',
+    'REJECTED',
+  };
+
   final int id;
   final int tableNumber;
+  final int? sessionId;
   final String itemsDescription;
   final double totalAmount;
   String status; // PENDING, PREPARING, SERVED, PAID, REJECTED
   String paymentMethod; // UNPAID, CASH, GCASH
   String updatedAt;
   final DateTime? billRequestedAt;
+  final List<OrderLine> items;
+  final DateTime? createdAt;
 
   AdminOrder({
     required this.id,
     required this.tableNumber,
+    this.sessionId,
     required this.itemsDescription,
     required this.totalAmount,
     required this.status,
     required this.paymentMethod,
     required this.updatedAt,
     this.billRequestedAt,
+    this.items = const [],
+    this.createdAt,
   });
+
+  /// May nakabinbing bill request ba para sa session ng order na ito?
+  /// Hindi ito binibilang kapag terminal na ang status (bayad/sarado na).
+  bool get hasPendingBillRequest =>
+      billRequestedAt != null &&
+      !_terminalBillStatuses.contains(status.toUpperCase());
 
   factory AdminOrder.fromJson(Map<String, dynamic> json) {
     return AdminOrder(
       id: json['id'] ?? json['order_id'] ?? 100,
       tableNumber: json['table_number'] ?? json['table_id'] ?? 1,
+      sessionId: int.tryParse(
+        (json['session_id'] ?? json['table_session_id'] ?? '').toString(),
+      ),
       itemsDescription: _parseItems(json['items']),
       totalAmount: double.tryParse(json['total_amount']?.toString() ?? '0') ?? 0.0,
       status: (json['order_status'] ?? json['status'] ?? 'PENDING').toString().toUpperCase(),
       paymentMethod: (json['payment_method'] ?? 'UNPAID').toString().toUpperCase(),
       updatedAt: _formatTime(json['updated_at'] ?? json['created_at']),
       billRequestedAt: _parseDate(json['bill_requested_at'] ?? json['bill_requested'] ?? json['requested_at'] ?? json['session_bill_requested_at']),
+      items: _parseItemsList(json['items']),
+      createdAt: _parseDate(json['created_at']),
     );
+  }
+
+  static List<OrderLine> _parseItemsList(dynamic items) {
+    if (items is List) {
+      return items
+          .map((i) => OrderLine.fromJson(Map<String, dynamic>.from(i as Map)))
+          .toList();
+    }
+    return const <OrderLine>[];
   }
 
   static String _parseItems(dynamic items) {

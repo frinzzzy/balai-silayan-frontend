@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'admin_dashboard_screen.dart';
+import 'services/audio_notification_service.dart';
+import 'services/notification_center.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
@@ -8,6 +10,12 @@ Future<void> main() async {
   try {
     await dotenv.load(fileName: ".env");
   } catch (_) {}
+
+  // In-app banner/system notification infra para sa admin bill alerts.
+  await AudioNotificationService.initializeLocalNotifications();
+  await AudioNotificationService.requestNotificationPermission();
+  WidgetsBinding.instance.addObserver(NotificationLifecycleObserver());
+
   runApp(const BalaiAdminApp());
 }
 
@@ -20,6 +28,10 @@ class BalaiAdminApp extends StatelessWidget {
       title: 'Balai Silayan - Admin & Staff Portal',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
+      // Kailangan ito para makapag-overlay ng banner kahit saan sa app
+      // (kasama ang mga nakabukas na dialog) at para may fallback messenger.
+      navigatorKey: NotificationCenter.navigatorKey,
+      scaffoldMessengerKey: NotificationCenter.messengerKey,
       home: const AdminDashboardScreen(),
     );
   }

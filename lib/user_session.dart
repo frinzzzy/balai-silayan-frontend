@@ -15,6 +15,47 @@ class UserSession {
   static double lastPlacedOrderTotal = 0.0;
   static List<dynamic> lastPlacedOrderItems = [];
 
+  /// Per-ticket bill state cache: orderId (string) -> ISO timestamp.
+  /// Pinopopulate ito mula sa backend responses at socket events. Hindi ito
+  /// source of truth — ang backend pa rin — pero ito ang ginagamit ng UI para
+  /// mabilis na malaman kung aling ticket ang naka-blur/locked.
+  static final Map<String, String> requestedBillTicketIds = <String, String>{};
+
+  /// Pinaka-kamakailang active order/ticket ng customer. Ginagamit para sa
+  /// "Live Status" at "Orders" para hindi na bumalik sa hardcoded ID.
+  static dynamic get activeOrderId =>
+      lastPlacedOrderId ?? firstOrderId ?? targetParentOrderId;
+
+  static bool get hasAnyBillRequest => requestedBillTicketIds.isNotEmpty;
+
+  static bool isTicketBillRequested(dynamic orderId) {
+    if (orderId == null) return false;
+    return requestedBillTicketIds.containsKey(orderId.toString());
+  }
+
+  static String? billRequestedAtFor(dynamic orderId) {
+    if (orderId == null) return null;
+    return requestedBillTicketIds[orderId.toString()];
+  }
+
+  static void setTicketBillRequested(dynamic orderId, dynamic requestedAt) {
+    if (orderId == null) return;
+    if (requestedAt == null) {
+      requestedBillTicketIds.remove(orderId.toString());
+    } else {
+      requestedBillTicketIds[orderId.toString()] = requestedAt.toString();
+    }
+  }
+
+  static void clearTicketBillRequested(dynamic orderId) {
+    if (orderId == null) return;
+    requestedBillTicketIds.remove(orderId.toString());
+  }
+
+  static void clearAllBillRequests() {
+    requestedBillTicketIds.clear();
+  }
+
   static bool get isLoggedIn => authToken != null && authToken!.isNotEmpty;
 
   static String formatOrderCode(dynamic orderId) {

@@ -5,9 +5,14 @@ import 'dart:async';
 
 import 'qr_scanner_screen.dart';
 import 'order_type_selection_screen.dart';
+import '../widgets/finished_order_dialog.dart';
 import 'user_session.dart';
 import 'services/audio_notification_service.dart';
+import 'services/global_socket_listener.dart';
 import 'services/socket_service.dart';
+import 'services/order_context.dart';
+import 'services/order_event_bus.dart';
+import 'services/order_event_router.dart';
 import 'config/api_config.dart';
 
 class OrderStatusScreen extends StatefulWidget {
@@ -33,8 +38,9 @@ class OrderStatusScreen extends StatefulWidget {
 }
 
 class _OrderStatusScreenState extends State<OrderStatusScreen> {
-  final SocketService _socketService = SocketService();
   Timer? _statusPollTimer;
+  int? _refreshToken;
+  int? _contextToken;
   String _statusBadgeLabel = "Pending review";
   String _currentOrderStatus = 'PENDING';
   int _stepperProgressIndex = 0;
@@ -44,13 +50,23 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   bool _sessionWasClosed = false;
   bool _billRequested = false;
 
+  static const Set<String> _terminalBillStatuses = <String>{
+    'PAID',
+    'COMPLETED',
+    'CLOSED',
+    'SETTLED',
+    'CANCELLED',
+    'DECLINED',
+    'REJECTED',
+  };
+
   double _fetchedTotalAmount = 0.0;
   String _fetchedOrderCode = '';
   String _formattedTimestamp = '';
   List<dynamic> _fetchedOrderItems = [];
   String _declineReason = '';
-  final Map<String, String> _lastNotifiedStatuses = {};
   String _lastAppliedStatus = '';
+  String? _lastStatusOrderKey;
 
   int _getStatusPriority(String status) {
     switch (status.toUpperCase()) {
@@ -85,6 +101,14 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     _fetchedTotalAmount = widget.totalAmount > 0 ? widget.totalAmount : UserSession.lastPlacedOrderTotal;
     _fetchedOrderItems = widget.initialOrderItems ?? UserSession.lastPlacedOrderItems;
     _connectRepositorySocketStream();
+    _contextToken = OrderContext.instance.enter(
+      mode: CustomerOrderMode.viewingOrder,
+      viewingOrderId: widget.orderId ?? UserSession.lastPlacedOrderId,
+      viewedParentId: UserSession.targetParentOrderId,
+    );
+    _refreshToken = OrderEventBus.instance.subscribeRefresh(() {
+      if (mounted) _fetchLatestOrderFromBackend();
+    });
     _fetchLatestOrderFromBackend();
 
     _statusPollTimer = Timer.periodic(const Duration(seconds: 6), (timer) {
@@ -100,12 +124,17 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   void didUpdateWidget(covariant OrderStatusScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.orderId != widget.orderId) {
+      OrderContext.instance.update(
+        viewingOrderId: widget.orderId ?? UserSession.lastPlacedOrderId,
+        viewedParentId: UserSession.targetParentOrderId,
+      );
       setState(() {
         _isLoadingLiveOrder = true;
         _fetchedTotalAmount = widget.totalAmount > 0 ? widget.totalAmount : UserSession.lastPlacedOrderTotal;
         _fetchedOrderItems = widget.initialOrderItems ?? UserSession.lastPlacedOrderItems;
         _lastAppliedStatus = '';
-        _lastNotifiedStatuses.clear();
+        _lastStatusOrderKey = null;
+        _currentOrderStatus = 'PENDING';
         _billRequested = false;
       });
       _fetchLatestOrderFromBackend();
@@ -135,22 +164,16 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       Map<String, dynamic>? matchingOrder;
       double sessionGrandTotal = 0.0;
       List<dynamic> sessionItems = [];
-      bool currentOrderCompleted = false;
-      bool sessionWideCompleted = false;
 
       // 1. Direct endpoint check para sa kasalukuyang tinitingnang ticket
       if (targetOrderId != null) {
         try {
-          final singleRes = await http.get(Uri.parse('$_baseUrl/api/v1/orders/$targetOrderId'));
+          final singleRes = await http.get(Uri.parse('$_baseUrl/api/v1/orders/$targetOrderId')).timeout(const Duration(seconds: 10));
           if (singleRes.statusCode == 200) {
             final singleData = jsonDecode(singleRes.body);
             final resData = singleData['data'] ?? singleData['order'];
             if (resData != null && resData is Map) {
               matchingOrder = Map<String, dynamic>.from(resData);
-              final String st = (matchingOrder['status'] ?? matchingOrder['order_status'] ?? '').toString().toUpperCase();
-              if (st == 'COMPLETED' || st == 'PAID' || st == 'CLOSED' || st == 'SETTLED') {
-                currentOrderCompleted = true;
-              }
             }
           }
         } catch (_) {}
@@ -162,7 +185,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           : '$_baseUrl/api/v1/customer/orders/live?table_id=$tableNum';
 
       try {
-        final response = await http.get(Uri.parse(liveUrl));
+        final response = await http.get(Uri.parse(liveUrl)).timeout(const Duration(seconds: 10));
         if (response.statusCode == 200) {
           final dynamic decodedResponse = jsonDecode(response.body);
           final dynamic responseData = decodedResponse is Map
@@ -178,18 +201,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
               return sum + (double.tryParse(ord['total_amount']?.toString() ?? ord['order_total']?.toString() ?? '0') ?? 0.0);
             });
 
-            bool allCompleted = ordersList.isNotEmpty;
-            for (final ord in ordersList) {
-              final String st = (ord['status'] ?? ord['order_status'] ?? '').toString().toUpperCase();
-              if (!(st == 'COMPLETED' || st == 'PAID' || st == 'CLOSED' || st == 'SETTLED')) {
-                allCompleted = false;
-                break;
-              }
-            }
-            if (ordersList.isNotEmpty && allCompleted) {
-              sessionWideCompleted = true;
-            }
-
             // EXPLICIT MATCHING gamit ang firstWhere para iwas state overwrite at orders[0] assumptions
             if (targetOrderId != null) {
               try {
@@ -198,10 +209,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                   return orderEntityId != null && SocketService.isSameOrder(orderEntityId, targetOrderId);
                 });
                 matchingOrder = Map<String, dynamic>.from(foundOrder);
-                final String st = (matchingOrder['status'] ?? matchingOrder['order_status'] ?? '').toString().toUpperCase();
-                if (st == 'COMPLETED' || st == 'PAID' || st == 'CLOSED' || st == 'SETTLED') {
-                  currentOrderCompleted = true;
-                }
               } catch (_) {}
             }
           }
@@ -218,20 +225,11 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         };
       }
 
-      if (widget.orderId != null && (currentOrderCompleted || sessionWideCompleted)) {
-        final String codeToUse = _fetchedOrderCode.isNotEmpty
-            ? _fetchedOrderCode
-            : UserSession.formatOrderCode(targetOrderId);
-        // Only show the finished dialog on an actual transition into a
-        // completed/settled state to avoid duplicate notifications.
-        final bool justTransitionedToFinished =
-            _lastAppliedStatus.isEmpty || _lastAppliedStatus != 'PAID';
-        if (justTransitionedToFinished) {
-          _showSessionFinishedDialog(codeToUse);
-        }
-      }
+      // Ang "Finished Order" pop-up ay hawak ng OrderEventRouter (OrderContext
+      // ang nagdedesisyon kung konektado ang ticket). Dito, status update lang.
 
       if (matchingOrder != null && mounted) {
+        final Map<String, dynamic> orderData = matchingOrder;
         final bool isAdditional = widget.isAdditionalOrder;
         final double orderTotal = double.tryParse(
           (matchingOrder['total_amount'] ?? matchingOrder['order_total'] ?? matchingOrder['grand_total'])?.toString() ?? '0',
@@ -269,7 +267,15 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
 
         final int currentPriority = _getStatusPriority(_currentOrderStatus);
         final int serverPriority = _getStatusPriority(serverStatus);
-        final String effectiveStatus = serverPriority >= currentPriority ? serverStatus : _currentOrderStatus;
+        // The monotonic clamp is only valid while watching the SAME ticket.
+        // Kapag bagong order ang tinitingnan, ang server status ang masusunod
+        // para hindi manatiling COMPLETED ang bagong PENDING order.
+        final String orderKey = (targetOrderId ?? '').toString();
+        final bool isSameOrder = _lastStatusOrderKey != null && _lastStatusOrderKey == orderKey;
+        final String effectiveStatus = isSameOrder && serverPriority < currentPriority
+            ? _currentOrderStatus
+            : serverStatus;
+        _lastStatusOrderKey = orderKey;
 
         final String code = matchingOrder['order_code'] ?? _formatOrderCode(targetOrderId);
 
@@ -302,6 +308,19 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           _formattedTimestamp = timeStr;
           _fetchedOrderItems = sessionItems;
           _isLoadingLiveOrder = false;
+
+          // I-restore ang bill-requested state mula sa server para tama pa rin
+          // ito pag nag-refresh o bumalik ang customer sa screen.
+          if (orderData.containsKey('bill_requested_at')) {
+            final bool hasBillRequest =
+                orderData['bill_requested_at'] != null;
+            final bool isTerminal =
+                _terminalBillStatuses.contains(serverStatus) ||
+                    _terminalBillStatuses.contains(effectiveStatus);
+            _billRequested =
+                hasBillRequest && !isTerminal && !_sessionWasClosed;
+          }
+
           _applyStatusValues(effectiveStatus);
         });
         return;
@@ -334,12 +353,15 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   }
 
   void _connectRepositorySocketStream() {
-    _socketService.connect(
-      onOrderUpdated: (data) => _applyLiveOrderUpdate(data),
-      onStatusUpdated: (data) => _applyLiveOrderUpdate(data),
-      onSessionClosed: (data) => _handleSessionClosed(data),
-      onBillRequested: (data) => _handleBillRequested(data),
+    // Single global socket (GlobalSocketListener) — hindi na UI-bound ang
+    // OrderStatusScreen para maging consistent ang lahat ng customer notifications.
+    GlobalSocketListener.instance.start(context: context);
+    GlobalSocketListener.instance.registerTableIdentity(
+      tableId: widget.tableId,
+      tableNumber: UserSession.activeTableNumber,
     );
+    GlobalSocketListener.instance.setOnSessionClosed((data) => _handleSessionClosed(data));
+    GlobalSocketListener.instance.setOnBillRequested((data) => _handleBillRequested(data));
   }
 
   bool _dialogShown = false;
@@ -353,25 +375,12 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFFFFFDFA),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-          title: const Text('Order Session Finished', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
-          content: Text('This order session ($orderCode) has been settled and finished.'),
-          actions: [
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
-              onPressed: () {
-                Navigator.pop(ctx);
-                UserSession.clearSession();
-                _navigateToMenu();
-              },
-              child: const Text('Back to Selection', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ],
+      unawaited(
+        FinishedOrderDialog.show(
+          orderCode: orderCode,
+          orderId: UserSession.formatOrderCode(
+            widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId,
+          ),
         ),
       );
     });
@@ -436,6 +445,19 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     // re-applied (e.g. duplicate socket events, polling refreshes, refetches).
     final bool isStatusTransition = _lastAppliedStatus.isEmpty || _lastAppliedStatus != normalizedStatus;
 
+    // Polling fallback: kapag socket ang namatay, dito pa rin lalabas ang
+    // banner (dedupe key ay pareho sa central socket path kaya walang doble).
+    if (isStatusTransition && _lastAppliedStatus.isNotEmpty && normalizedStatus.isNotEmpty) {
+      OrderEventRouter.instance.onStatusObserved(
+        status: normalizedStatus,
+        orderId: widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId,
+        orderCode: _fetchedOrderCode,
+        reason: _declineReason,
+        parentOrderId: UserSession.targetParentOrderId,
+        eventType: 'poll',
+      );
+    }
+
     _lastAppliedStatus = normalizedStatus;
     _currentOrderStatus = status;
     switch (status) {
@@ -466,10 +488,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         _statusBadgeLabel = 'Paid';
         _stepperProgressIndex = 3;
         _billRequested = false; // Na-settle na ang bill/session — bumalik sa normal na state.
-        if (isStatusTransition && widget.orderId != null) {
-          final dynamic targetId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
-          _showSessionFinishedDialog(_fetchedOrderCode.isNotEmpty ? _fetchedOrderCode : UserSession.formatOrderCode(targetId));
-        }
         break;
       case 'REJECTED':
       case 'DECLINED':
@@ -500,13 +518,11 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           ? dataPayload
           : (dataPayload is Map ? Map<String, dynamic>.from(dataPayload) : {});
           
-      final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-      final int? eventTableId = int.tryParse(data['table_id']?.toString() ?? data['table_number']?.toString() ?? '');
       final dynamic eventSessionId = data['session_id'];
 
       // Strict scoping
-      if (eventTableId != null && eventTableId != currentTable) return;
-      if (eventTableId == null && eventSessionId != null) {
+      if (!GlobalSocketListener.instance.isEventForCurrentTable(data, data)) return;
+      if (eventSessionId != null && data['table_id'] == null && data['table_number'] == null) {
         final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
         if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
           return;
@@ -522,146 +538,18 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         }
       }
     }
-    
+
+    // Kung terminal na ang order o sarado na ang session, huwag nang i-lock
+    // ang UI sa "Bill Requested" — tapos na ang billing cycle.
+    if (_sessionWasClosed ||
+        _terminalBillStatuses.contains(_currentOrderStatus.toUpperCase())) {
+      return;
+    }
+
     setState(() {
       _billRequested = true;
       _showLiveTrackerView = false;
     });
-  }
-
-  void _applyLiveOrderUpdate(dynamic eventPayloadData) {
-    if (eventPayloadData == null || !mounted) return;
-
-    final Map<String, dynamic> data = eventPayloadData is Map<String, dynamic>
-        ? eventPayloadData
-        : Map<String, dynamic>.from(eventPayloadData as Map);
-
-    final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-    final Map<String, dynamic> orderPayload = data['order'] is Map ? Map<String, dynamic>.from(data['order']) : data;
-
-    final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? data['table_id']?.toString() ?? '');
-    final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? data['order_id'] ?? data['id'];
-    final dynamic eventSessionId = orderPayload['session_id'] ?? data['session_id'];
-
-    // Strict Scoping Rule: Reject events targeting other tables
-    if (eventTableId != null && eventTableId != currentTable) {
-      return;
-    }
-    
-    // Strict Scoping Rule: If eventTableId is null, fall back to session validation
-    if (eventTableId == null && eventSessionId != null) {
-      final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-      if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
-        return;
-      }
-    }
-    
-    // If we have absolutely no identifiers, discard it to avoid cross-talk.
-    if (eventTableId == null && eventSessionId == null && eventOrderId == null) {
-      return;
-    }
-
-    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? data['status'] ?? data['order_status'] ?? '').toString().toUpperCase();
-    final String rStr = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? data['decline_reason'] ?? data['reason'] ?? '').toString();
-    if (rStr.isNotEmpty) {
-      _declineReason = rStr;
-    }
-
-    // Bill request events (hal. mula sa backend 'bill_requested') ay may status
-    // na empty — kaya itinatambay tayo ng maayos bago i-process bilang order update.
-    final bool isBillRequestedEvent = status.isEmpty && (
-      data['bill_requested_at'] != null ||
-      data['bill_status'] != null ||
-      data['grand_total'] != null ||
-      data['total_orders'] != null ||
-      data['event_type'] == 'bill_requested' ||
-      data['event'] == 'bill_requested'
-    );
-
-    if (isBillRequestedEvent) {
-      _handleBillRequested(data);
-      return;
-    }
-
-    // Spoke isolation: before any notification/state update, ensure the event
-    // belongs to the specific order this screen is currently tracking.
-    final dynamic currentTargetOrderId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
-    if (eventOrderId != null && currentTargetOrderId != null) {
-      if (!SocketService.isSameOrder(eventOrderId, currentTargetOrderId)) {
-        return;
-      }
-    }
-
-    // 1. GLOBAL NOTIFICATIONS (Maaabutan agad siya basta tama ang table id)
-    if (status.isNotEmpty) {
-      final String orderKey = (eventOrderId ?? widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? 'default').toString();
-      if (_lastNotifiedStatuses[orderKey] != status) {
-        _lastNotifiedStatuses[orderKey] = status;
-
-        final String ticketCode = eventOrderId != null
-            ? UserSession.formatOrderCode(eventOrderId)
-            : (_fetchedOrderCode.isNotEmpty
-                ? _fetchedOrderCode
-                : UserSession.formatOrderCode(widget.orderId ?? UserSession.lastPlacedOrderId));
-
-        Color alertBg = const Color(0xFF203F35);
-        String title = '$ticketCode: Order Status Update';
-        String desc = "Your order status changed to $status";
-        IconData icon = Icons.restaurant_menu;
-
-        if (status == 'PREPARING') {
-          title = '$ticketCode: Order Status: PREPARING';
-          desc = "The kitchen is now preparing your delicious meal.";
-          alertBg = const Color(0xFFD7BC86);
-          icon = Icons.kitchen;
-        } else if (status == 'SERVED' || status == 'READY') {
-          title = status == 'SERVED'
-              ? '$ticketCode: Order Status: SERVED'
-              : '$ticketCode: Order Status: READY';
-          desc = status == 'SERVED'
-              ? "Your order is hot and ready for your table."
-              : "Your order is ready for pickup / service.";
-          alertBg = const Color(0xFF22C55E);
-          icon = Icons.restaurant;
-        } else if (status == 'DECLINED' || status == 'REJECTED') {
-          title = '$ticketCode: Order Status: DECLINED';
-          desc = rStr.isNotEmpty ? "Reason: $rStr" : "Please check with staff for details.";
-          alertBg = const Color(0xFFEF4444);
-          icon = Icons.cancel;
-        } else if (status == 'COMPLETED' || status == 'PAID') {
-          title = '$ticketCode: Payment Completed';
-          desc = "Your table session receipt has been settled.";
-          alertBg = const Color(0xFF10B981);
-          icon = Icons.check_circle;
-        }
-
-        AudioNotificationService.showAggressiveBanner(
-          context: context,
-          title: title,
-          message: desc,
-          backgroundColor: alertBg,
-          icon: icon,
-        );
-      }
-    }
-
-    if (eventSessionId != null) {
-      UserSession.activeSessionId = int.tryParse(eventSessionId.toString());
-      UserSession.sessionId = eventSessionId.toString();
-    }
-
-    if (eventOrderId != null) {
-      UserSession.lastPlacedOrderId = eventOrderId;
-    }
-
-    setState(() {
-      _showLiveTrackerView = true;
-      if (status.isNotEmpty) {
-        _applyStatusValues(status);
-      }
-    });
-
-    _fetchLatestOrderFromBackend();
   }
 
   void _handleSessionClosed(dynamic eventPayloadData) {
@@ -673,23 +561,21 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         : (eventPayloadData is Map ? Map<String, dynamic>.from(eventPayloadData) : {});
     final Map<String, dynamic> orderPayload = data['order'] is Map ? Map<String, dynamic>.from(data['order']) : data;
 
-    final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-    final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? data['table_id']?.toString() ?? '');
     final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? data['order_id'] ?? data['id'];
     final dynamic eventSessionId = orderPayload['session_id'] ?? data['session_id'];
 
-    if (eventTableId != null && eventTableId != currentTable) {
+    if (!GlobalSocketListener.instance.isEventForCurrentTable(orderPayload, data)) {
       return;
     }
     
-    if (eventTableId == null && eventSessionId != null) {
+    if (eventSessionId != null && orderPayload['table_id'] == null && data['table_id'] == null) {
       final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
       if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
         return;
       }
     }
     
-    if (eventTableId == null && eventSessionId == null && eventOrderId == null) {
+    if (eventSessionId == null && eventOrderId == null) {
       return;
     }
 
@@ -703,13 +589,29 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     }
 
     final dynamic targetId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
+    setState(() {
+      _sessionWasClosed = true;
+      _billRequested = false;
+      _showLiveTrackerView = false;
+    });
     _showSessionFinishedDialog(_fetchedOrderCode.isNotEmpty ? _fetchedOrderCode : UserSession.formatOrderCode(targetId));
   }
 
   @override
   void dispose() {
     _statusPollTimer?.cancel();
-    _socketService.disconnect();
+    if (_refreshToken != null) {
+      OrderEventBus.instance.unsubscribe(_refreshToken!);
+      _refreshToken = null;
+    }
+    if (_contextToken != null) {
+      OrderContext.instance.leave(_contextToken!);
+      _contextToken = null;
+    }
+    // Session-close/bill handlers lang ang i-restore; ang order events ay
+    // dumadaan na sa broadcast bus kaya walang na-clobber na handler.
+    GlobalSocketListener.instance.setOnSessionClosed(GlobalSocketListener.instance.defaultOrderSessionClosed);
+    GlobalSocketListener.instance.setOnBillRequested(null);
     super.dispose();
   }
 

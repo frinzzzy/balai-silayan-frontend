@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
@@ -40,10 +39,19 @@ class _OrdersScreenState extends State<OrdersScreen> {
       io.OptionBuilder()
           .setTransports(['websocket', 'polling'])
           .disableAutoConnect()
+          .setReconnectionAttempts(99999)
+          .setReconnectionDelay(1000)
+          .setReconnectionDelayMax(5000)
           .build(),
     );
     _socket.onConnect((_) {
       _socket.emit('join_room', 'admin_live_monitoring');
+      _socket.emit('join_room', 'kitchen_monitoring');
+    });
+    // Kapag na-reconnect (hal. after sleep), i-rejoin ang monitoring rooms.
+    _socket.onReconnect((_) {
+      _socket.emit('join_room', 'admin_live_monitoring');
+      _socket.emit('join_room', 'kitchen_monitoring');
     });
     _socket.on('order_updated', _handleLiveMonitoringUpdate);
     _socket.connect();
@@ -98,7 +106,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       final response = await http.get(
         Uri.parse('$_baseUrl/api/v1/orders'),
         headers: headers,
-      );
+      ).timeout(const Duration(seconds: 15));
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
         final List<dynamic> dataList = resData['data'] ?? [];

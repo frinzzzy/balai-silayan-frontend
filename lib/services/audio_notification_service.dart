@@ -4,6 +4,11 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import '../user_session.dart';
+import 'notification_center.dart';
 
 class NotificationRecord {
   final String title;
@@ -24,10 +29,98 @@ class NotificationRecord {
 class AudioNotificationService {
   static final AudioPlayer _audioPlayer = AudioPlayer();
   static final List<NotificationRecord> history = [];
-  
+
+  static final Map<String, NotificationPayload> _pendingBanners = <String, NotificationPayload>{};
+  static const int _maxPendingBanners = 20;
+
+  /// Root messenger key — fallback lang ito. Ang pangunahing presentation ay
+  /// overlay-based na (NotificationCenter).
+  static GlobalKey<ScaffoldMessengerState> get messengerKey =>
+      NotificationCenter.messengerKey;
+
   // Deduplication lock variables
   static String _lastBannerSignature = "";
   static DateTime _lastBannerTimestamp = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Foreground/background state ng app. Pinop ito ng [NotificationLifecycleObserver]
+  /// (registered sa main) — kapag background, gumagamit ng system notification
+  /// ang presentation instead of the in-app overlay banner.
+  static bool _isAppInForeground = true;
+  static bool get isAppInForeground => _isAppInForeground;
+  static void setAppInForeground(bool value) => _isAppInForeground = value;
+
+  /// Android 8.0+ notification channel — kailangan gawa bago mag-send ng
+  /// system notification (walang channel, hindi lalabas ang notification).
+  static const String orderNotificationChannelId = 'balai_silayan_orders';
+  static const String orderNotificationChannelName = 'Balai Silayan Order Alerts';
+
+  /// I-initialize ang flutter_local_notifications: notification channel +
+  /// Android plugin init. Ito ang dapat i-call bago mag-show ng notification.
+  static Future<void> initializeLocalNotifications() async {
+    try {
+      final FlutterLocalNotificationsPlugin plugin = FlutterLocalNotificationsPlugin();
+      await plugin.initialize(
+        settings: InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        ),
+      );
+      debugPrint('✅ [AudioNotificationService] Local notifications initialized.');
+    } catch (e) {
+      debugPrint('⚠️ [AudioNotificationService] Local notifications init failed: $e');
+    }
+  }
+
+  /// Request ang POST_NOTIFICATIONS permission (Android 13+) para sa system
+  /// notifications kapag background ang app.
+  static Future<bool> requestNotificationPermission() async {
+    try {
+      final PermissionStatus status = await Permission.notification.request();
+      return status.isGranted;
+    } catch (e) {
+      debugPrint('⚠️ [NotificationPermission] request failed: $e');
+      return false;
+    }
+  }
+
+  /// Show system-level notification (flutter_local_notifications) — ipinakita
+  /// ito kapag background ang app (overlay ay hindi mag-render sa background).
+  static Future<void> showSystemNotification({
+    required String title,
+    required String message,
+    required Color backgroundColor,
+    required IconData icon,
+    String? orderId,
+  }) async {
+    try {
+      final FlutterLocalNotificationsPlugin plugin = FlutterLocalNotificationsPlugin();
+      final int notificationId = (orderId ?? title).hashCode;
+      await plugin.show(
+        id: notificationId,
+        title: title,
+        body: message,
+        notificationDetails: NotificationDetails(
+          android: const AndroidNotificationDetails(
+            orderNotificationChannelId,
+            orderNotificationChannelName,
+            channelDescription: 'Balai Silayan order status alerts',
+            importance: Importance.high,
+            priority: Priority.high,
+            playSound: true,
+            enableVibration: true,
+            icon: 'ic_stat_balai',
+          ),
+        ),
+        payload: orderId,
+      );
+    } catch (e) {
+      debugPrint('⚠️ [AudioNotificationService] system notification error: $e');
+    }
+  }
+
+  /// Tinatawag kapag bagong table/session (hal. bagong QR scan) para hindi
+  /// ma-block ng dating status ang mga bagong notification.
+  static void resetOrderNotificationDedupe() =>
+      NotificationCenter.instance.resetDedupe();
 
   /// Play sound chime and trigger built-in haptic vibration
   static Future<void> playStatusAlertSound() async {
@@ -73,67 +166,310 @@ class AudioNotificationService {
     _lastBannerSignature = currentSignature;
     _lastBannerTimestamp = now;
 
-    // I-play ang alert sound sa background na hindi nahaharang ng banner flow.
-    // Kapag walang audio asset o mag-fail ang playback, hindi ito dapat
-    // hinaharang sa pagpapakita ng SnackBar notification.
+    unawaited(
+      _presentBanner(
+        title: title,
+        message: message,
+        backgroundColor: backgroundColor,
+        icon: icon,
+      ),
+    );
+  }
+
+  /// Central order-status banner. Ito ang TANGING source of truth para sa
+  /// customer notifications — tinatawag mula sa GlobalSocketListener at sa
+  /// polling fallback. Sakop ang LAHAT ng status (may generic fallback).
+  static bool showOrderStatusBanner({
+    required String status,
+    required String orderCode,
+    dynamic orderId,
+    String? reason,
+    int? tableId,
+    int? sessionId,
+    String? eventType,
+  }) {
+    final String normalized = status.trim().toUpperCase();
+    if (normalized.isEmpty) return false;
+
+    final String sessionKey =
+        (UserSession.activeSessionId ?? UserSession.sessionId ?? '').toString();
+    final String dedupeKey = 'status|$sessionKey|${orderId ?? orderCode}|$normalized';
+
+    String title;
+    String message;
+    Color background;
+    IconData icon;
+
+    switch (normalized) {
+      case 'NEW':
+      case 'PENDING':
+        title = '$orderCode: New Order';
+        message = 'A new order has been received for your table.';
+        background = const Color(0xFF8B5CF6);
+        icon = Icons.fastfood;
+        break;
+      case 'PREPARING':
+      case 'IN_PROGRESS':
+        title = '$orderCode: Order Status: PREPARING';
+        message = 'The kitchen is now preparing your delicious meal.';
+        background = const Color(0xFFD7BC86);
+        icon = Icons.kitchen;
+        break;
+      case 'READY':
+        title = '$orderCode: Order Status: READY';
+        message = 'Your order is ready for pickup / service.';
+        background = const Color(0xFF22C55E);
+        icon = Icons.restaurant;
+        break;
+      case 'SERVED':
+        title = '$orderCode: Order Status: SERVED';
+        message = 'Your order is hot and ready for your table.';
+        background = const Color(0xFF22C55E);
+        icon = Icons.restaurant;
+        break;
+      case 'COMPLETED':
+      case 'PAID':
+      case 'CLOSED':
+      case 'SETTLED':
+        title = '$orderCode: Payment Completed';
+        message = 'Your table session receipt has been settled.';
+        background = const Color(0xFF10B981);
+        icon = Icons.check_circle;
+        break;
+      case 'DECLINED':
+      case 'REJECTED':
+      case 'CANCELLED':
+        title = '$orderCode: Order Status: DECLINED';
+        message = (reason != null && reason.trim().isNotEmpty)
+            ? 'Reason: $reason'
+            : 'Please check with staff for details.';
+        background = const Color(0xFFEF4444);
+        icon = Icons.cancel;
+        break;
+      default:
+        title = '$orderCode: Order Status: $normalized';
+        message = 'Your order status changed to $normalized.';
+        background = const Color(0xFF203F35);
+        icon = Icons.restaurant_menu;
+    }
+
+    final NotificationPayload payload = NotificationPayload(
+      title: title,
+      message: message,
+      backgroundColor: background,
+      icon: icon,
+      duration: const Duration(seconds: 4),
+    );
+
+    // Background handling — bago pa man ang dedupe consumption, para hindi
+    // mawala ang banner na in-queue (web) o inagad sa system notification (mobile).
+    if (!_isAppInForeground) {
+      // Web background tab: i-queue; i-flush ito ng flushPendingBanners sa resume.
+      if (kIsWeb) {
+        if (_pendingBanners.length >= _maxPendingBanners) {
+          _pendingBanners.remove(_pendingBanners.keys.first);
+        }
+        _pendingBanners[dedupeKey] = payload;
+        return true;
+      }
+
+      unawaited((() async {
+        final PermissionStatus notificationStatus = await Permission.notification.status;
+        if (notificationStatus.isGranted) {
+          if (!NotificationCenter.instance.shouldNotify(dedupeKey)) return;
+          unawaited(playStatusAlertSound());
+          _insertOrUpdateRecord(NotificationRecord(
+            title: title,
+            message: message,
+            timestamp: DateTime.now(),
+            backgroundColor: background,
+            icon: icon,
+          ));
+          await showSystemNotification(
+            title: title,
+            message: message,
+            backgroundColor: background,
+            icon: icon,
+            orderId: orderId?.toString() ?? orderCode,
+          );
+        } else {
+          _pendingBanners[dedupeKey] = payload;
+        }
+      })());
+      return true;
+    }
+
+    // Foreground lang dito — single dedupe check, per status key.
+    if (!NotificationCenter.instance.shouldNotify(dedupeKey)) return false;
+
+    _presentBanner(
+      title: title,
+      message: message,
+      backgroundColor: background,
+      icon: icon,
+    );
+    return true;
+  }
+
+  static void flushPendingBanners() {
+    if (_pendingBanners.isEmpty) return;
+    final List<MapEntry<String, NotificationPayload>> entries = _pendingBanners.entries.toList();
+    _pendingBanners.clear();
+    for (final entry in entries) {
+      if (!NotificationCenter.instance.shouldNotify(entry.key)) continue;
+      // I-replay ito pinaagi ng _presentBanner para hindi mawawala ang sound +
+      // notification history (kung direktang NotificationCenter.instance.show lang).
+      _presentBanner(
+        title: entry.value.title,
+        message: entry.value.message,
+        backgroundColor: entry.value.backgroundColor,
+        icon: entry.value.icon,
+      );
+    }
+  }
+
+  /// Banner kapag nag-request ng bill ang customer.
+  static bool showBillRequestedBanner({
+    required String orderCode,
+    dynamic orderId,
+    dynamic grandTotal,
+    int? tableId,
+    int? sessionId,
+  }) {
+    final String sessionKey =
+        (UserSession.activeSessionId ?? UserSession.sessionId ?? '').toString();
+    final String dedupeKey = 'bill|$sessionKey|${orderId ?? orderCode}';
+    if (!NotificationCenter.instance.shouldNotify(dedupeKey)) return false;
+
+    final String total = (grandTotal != null && grandTotal.toString().isNotEmpty)
+        ? ' Total: ₱$grandTotal'
+        : '';
+    unawaited(
+      _presentBanner(
+        title: '$orderCode: Bill Requested',
+        message: 'Naipadala na ang request ninyong bill sa staff.$total',
+        backgroundColor: const Color(0xFF0EA5E9),
+        icon: Icons.receipt_long,
+      ),
+    );
+    return true;
+  }
+
+  /// Banner kapag natapos/na-settle na ang buong table session.
+  static bool showSessionClosedBanner({
+    required String orderCode,
+    dynamic orderId,
+    int? tableId,
+    int? sessionId,
+  }) {
+    final String sessionKey =
+        (UserSession.activeSessionId ?? UserSession.sessionId ?? '').toString();
+    final String dedupeKey = 'session_closed|$sessionKey|${orderId ?? orderCode}';
+    if (!NotificationCenter.instance.shouldNotify(dedupeKey)) return false;
+
+    unawaited(
+      _presentBanner(
+        title: 'Session Closed',
+        message: 'Na-settle na ang inyong table session. Salamat po!',
+        backgroundColor: const Color(0xFF10B981),
+        icon: Icons.verified,
+      ),
+    );
+    return true;
+  }
+
+  /// Banner para sa admin kapag may customer na nag-request ng bill.
+  /// Dedupe key: `admin_bill|sessionId|billRequestedAt` — kaya refresh, back,
+  /// o tab switch ay hindi nagdodoble ng notification para sa parehong request.
+  static bool showAdminBillRequestedBanner({
+    required int tableNumber,
+    int? sessionId,
+    int? orderId,
+    DateTime? billRequestedAt,
+    dynamic grandTotal,
+    String? customerName,
+  }) {
+    final String requestStamp = billRequestedAt != null
+        ? billRequestedAt.toUtc().toIso8601String().substring(0, 19)
+        : 'no_timestamp';
+    final String sessionKey = sessionId != null && sessionId > 0
+        ? 'session_$sessionId'
+        : 'table_$tableNumber';
+    final String ticketKey = orderId != null && orderId > 0 ? 'order_$orderId' : 'order_any';
+    final String dedupeKey = 'admin_bill|$sessionKey|$ticketKey|$requestStamp';
+    // Mahabang TTL: ang isang bill request ay dapat minsan lang ma-alert sa
+    // buong shift, kahit maraming refresh/tab switch ang admin.
+    if (!NotificationCenter.instance.shouldNotify(
+      dedupeKey,
+      ttl: const Duration(hours: 24),
+    )) {
+      return false;
+    }
+
+    final String total = (grandTotal != null && grandTotal.toString().isNotEmpty)
+        ? ' • ₱$grandTotal'
+        : '';
+    final String who = (customerName != null && customerName.trim().isNotEmpty)
+        ? ' ($customerName)'
+        : '';
+
+    unawaited(
+      _presentBanner(
+        title: 'Bill Requested — Table ${tableNumber.toString().padLeft(2, '0')}',
+        message: 'May customer na humihingi ng bill$who.$total Pumunta na sa table.',
+        backgroundColor: const Color(0xFF0EA5E9),
+        icon: Icons.receipt_long,
+      ),
+    );
+    return true;
+  }
+
+  /// Ang nag-iisang presentation path ng lahat ng banner. Gumagamit ng root
+  /// ScaffoldMessenger para hindi mawala ang notif kapag na-dispose ang screen
+  /// na nag-register ng listener.
+  static Future<void> _presentBanner({
+    required String title,
+    required String message,
+    required Color backgroundColor,
+    required IconData icon,
+  }) async {
     unawaited(playStatusAlertSound());
 
     _insertOrUpdateRecord(
       NotificationRecord(
         title: title,
         message: message,
-        timestamp: now,
+        timestamp: DateTime.now(),
         backgroundColor: backgroundColor,
         icon: icon,
       ),
     );
 
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 6),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
+    // Overlay-based banner: nasa itaas ng LAHAT ng route, kasama ang
+    // nakabukas na dialog (dating natatakpan ng modal barrier ang SnackBar).
+    // Kapag background ang app, gumagamit ng system notification instead
+    // (overlay ay hindi mag-render sa background). Kailangan valid ang
+    // POST_NOTIFICATIONS permission bago mag-post sa system tray.
+    if (!isAppInForeground) {
+      final PermissionStatus notificationStatus = await Permission.notification.status;
+      if (notificationStatus.isGranted) {
+        await showSystemNotification(
+          title: title,
+          message: message,
+          backgroundColor: backgroundColor,
+          icon: icon,
+        );
+      }
+      return;
+    }
+
+    NotificationCenter.instance.show(
+      NotificationPayload(
+        title: title,
+        message: message,
         backgroundColor: backgroundColor,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        content: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: const BoxDecoration(
-                color: Colors.white24,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: Colors.white, size: 28),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    message,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        icon: icon,
+        duration: const Duration(seconds: 4),
       ),
     );
   }
@@ -166,14 +502,16 @@ class AudioNotificationService {
   }
 
   static void _insertOrUpdateRecord(NotificationRecord record) {
-    final String newOrderId = _extractOrderId(record.title);
-    final existingIndex = history.indexWhere((h) => _extractOrderId(h.title) == newOrderId);
+    // APPEND (hindi overwrite) para makita ang BUONG timeline ng statuses ng
+    // isang ticket sa Notification History — hindi lang ang huling status.
+    history.insert(0, record);
 
-    if (existingIndex != -1) {
-      history[existingIndex] = record;
-    } else {
-      history.insert(0, record);
+    // Safety cap para hindi lumaki nang walang hanggan sa mahabang session.
+    const int maxRecords = 200;
+    if (history.length > maxRecords) {
+      history.removeRange(maxRecords, history.length);
     }
+
     history.sort((a, b) => b.timestamp.compareTo(a.timestamp));
   }
 
@@ -351,5 +689,22 @@ class AudioNotificationService {
         ),
       ),
     );
+  }
+}
+
+/// Lifecycle observer na nagdadala ng foreground/background state ng app sa
+/// [AudioNotificationService] at nagre-request ng notification permission sa
+/// resume. Ito ang dahilan kung bakit gumagamit ng system notification ang app
+/// (lalo na kapag background) para sa order alerts.
+class NotificationLifecycleObserver with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final bool isForeground = state == AppLifecycleState.resumed;
+    AudioNotificationService.setAppInForeground(isForeground);
+    if (isForeground) {
+      unawaited(AudioNotificationService.requestNotificationPermission());
+      AudioNotificationService.flushPendingBanners();
+    }
   }
 }

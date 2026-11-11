@@ -1,14 +1,42 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'qr_scanner_screen.dart';
+import 'welcome_screen.dart';
 import 'admin_dashboard_screen.dart';
+import 'services/audio_notification_service.dart';
+import 'services/fcm_service.dart';
+import 'services/global_socket_listener.dart';
+import 'services/notification_center.dart';
+import 'services/supabase_realtime_service.dart';
 import 'theme/app_theme.dart';
+
+/// Lifecycle observer na nagdadala ng foreground/background state ng app sa
+/// notification service (overlay vs system notification) at nagre-request ng
+/// notification permission sa resume.
+class NotificationLifecycleObserver with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final bool isForeground = state == AppLifecycleState.resumed;
+    AudioNotificationService.setAppInForeground(isForeground);
+    if (isForeground) {
+      AudioNotificationService.flushPendingBanners();
+      unawaited(AudioNotificationService.requestNotificationPermission());
+    }
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     await dotenv.load(fileName: ".env");
   } catch (_) {}
+  WidgetsBinding.instance.addObserver(NotificationLifecycleObserver());
+  unawaited(AudioNotificationService.requestNotificationPermission());
+  unawaited(AudioNotificationService.initializeLocalNotifications());
+  unawaited(FcmService.init());
+  unawaited(SupabaseRealtimeService.instance.start());
   runApp(const ProductionSoftEngApp());
 }
 
@@ -23,9 +51,12 @@ class ProductionSoftEngApp extends StatelessWidget {
       title: 'Balai Silayan Heritage Restaurant',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
+      scaffoldMessengerKey: AudioNotificationService.messengerKey,
+      navigatorKey: NotificationCenter.navigatorKey,
+      navigatorObservers: [GlobalOrderRouteObserver()],
       home: showAdminDashboardDirectly
           ? const AdminDashboardScreen()
-          : const QrScannerScreen(),
+          : const WelcomeScreen(),
     );
   }
 }

@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'dart:convert';
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
 import 'user_session.dart';
+import 'services/global_socket_listener.dart';
 import 'config/api_config.dart';
 
 class BillRequestedScreen extends StatefulWidget {
@@ -13,6 +14,7 @@ class BillRequestedScreen extends StatefulWidget {
   final double totalAmount;
   final double foodDrinksTotal;
   final double addOnsTotal;
+  final String? billRequestedAt;
 
   const BillRequestedScreen({
     super.key,
@@ -21,6 +23,7 @@ class BillRequestedScreen extends StatefulWidget {
     this.totalAmount = 0.0,
     this.foodDrinksTotal = 0.0,
     this.addOnsTotal = 0.0,
+    this.billRequestedAt,
   });
 
   @override
@@ -28,84 +31,122 @@ class BillRequestedScreen extends StatefulWidget {
 }
 
 class _BillRequestedScreenState extends State<BillRequestedScreen> {
-  late io.Socket _socket;
-  String get _baseUrl => ApiConfig.baseUrl;
   String? _billRequestedAt;
+  bool _sessionSettled = false;
+  bool _isLoadingBillState = true;
 
-  String get _socketUrl {
-    var url = _baseUrl;
-    if (url.startsWith('https://')) {
-      url = 'wss://${url.substring('https://'.length)}';
-    } else if (url.startsWith('http://')) {
-      url = 'ws://${url.substring('http://'.length)}';
-    }
-    return url;
-  }
+  String get _baseUrl => ApiConfig.baseUrl;
 
   @override
   void initState() {
     super.initState();
-    _notifyBackendBillRequest();
-    _connectBillSocket();
+    _billRequestedAt = widget.billRequestedAt;
+    // Read-only refresh lang ito; hindi na nagre-request tuwing bubuksan ang
+    // screen para hindi na maulit ang bill request sa back/refresh.
+    _loadBillState();
+    // Phase D: gumagamit na nating ang GlobalSocketListener — hindi local na
+    // socket ang bawat screen.
+    GlobalSocketListener.instance.setOnBillRequested((data) => _handleBillRequestedEvent(data));
+    GlobalSocketListener.instance.setOnSessionClosed((data) => _handleSessionSettled(data));
   }
 
-  Future<void> _notifyBackendBillRequest() async {
+  Future<void> _loadBillState() async {
     try {
       final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
-      final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+      final Uri requestUri = Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill');
 
-      final Uri requestUri = sessionId != null
-          ? Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill')
-          : Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill');
+      final response = await http
+          .get(requestUri, headers: {'Content-Type': 'application/json'})
+          .timeout(const Duration(seconds: 10));
 
-      final token = UserSession.activeSessionToken;
-      final Map<String, String> headers = {
-        "Content-Type": "application/json",
-        if (token != null && token.isNotEmpty) "Authorization": "Bearer $token",
-      };
+      if (response.statusCode == 200) {
+        final dynamic decoded = jsonDecode(response.body);
+        final dynamic rawData = decoded is Map ? (decoded['data'] ?? decoded) : null;
+        if (rawData is Map && mounted) {
+          final Map<String, dynamic> data = Map<String, dynamic>.from(rawData);
+          final dynamic requestedAt =
+              data['bill_requested_at'] ?? data['requested_at'];
+          final String sessionStatus =
+              (data['session_status'] ?? 'ACTIVE').toString().toUpperCase();
+          final List<dynamic> activeOrders =
+              data['orders'] is List ? data['orders'] as List : const [];
 
-      await http.get(requestUri, headers: headers);
+          // Per-ticket mode: kapag may kahit isang ticket na nag-request ng bill,
+          // hindi na dapat i-clear ang screen state kahit NULL ang legacy
+          // session-level marker.
+          String? requestedStamp = requestedAt?.toString();
+          if (requestedStamp == null) {
+            for (final dynamic raw in activeOrders) {
+              if (raw is Map && raw['bill_requested_at'] != null) {
+                requestedStamp = raw['bill_requested_at'].toString();
+                break;
+              }
+            }
+          }
+
+          setState(() {
+            _billRequestedAt = requestedStamp ?? _billRequestedAt;
+            _sessionSettled = (sessionStatus == 'CLOSED' ||
+                    sessionStatus == 'COMPLETED' ||
+                    sessionStatus == 'SETTLED') &&
+                activeOrders.isEmpty;
+            _isLoadingBillState = false;
+          });
+          return;
+        }
+      }
     } catch (_) {}
+
+    if (mounted) {
+      setState(() => _isLoadingBillState = false);
+    }
   }
 
-  void _connectBillSocket() {
-    try {
-      _socket = io.io(
-        _socketUrl,
-        io.OptionBuilder()
-            .setTransports(['websocket', 'polling'])
-            .enableAutoConnect()
-            .build(),
-      );
+  bool _isEventForThisTable(dynamic data) {
+    if (data is! Map) return true;
+    final int? currentSessionId = UserSession.activeSessionId ??
+        int.tryParse(UserSession.sessionId ?? '');
+    final int? eventSessionId = int.tryParse(
+      (data['session_id'] ?? '').toString(),
+    );
+    if (currentSessionId != null &&
+        eventSessionId != null &&
+        currentSessionId != eventSessionId) {
+      return false;
+    }
 
-      _socket.onConnect((_) {
-        final int? tableId = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber;
-        if (tableId != null) {
-          _socket.emit('join_room', 'table_$tableId');
-        }
-        final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-        if (sessionId != null) {
-          _socket.emit('join_room', 'session_$sessionId');
-        }
-      });
-
-      _socket.on('order_paid', _handleSessionSettled);
-      _socket.on('table_session_closed', _handleSessionSettled);
-      _socket.on('session_cancelled', _handleSessionSettled);
-      _socket.on('bill_requested', _handleBillRequestedEvent);
-      _socket.connect();
-    } catch (_) {}
+    final int? currentTableId = widget.tableId ??
+        UserSession.activeTableId ??
+        UserSession.activeTableNumber;
+    final int? eventTableId = int.tryParse(
+      (data['table_id'] ?? data['table_number'] ?? '').toString(),
+    );
+    if (currentTableId != null &&
+        eventTableId != null &&
+        currentTableId != eventTableId) {
+      return false;
+    }
+    return true;
   }
 
   void _handleBillRequestedEvent(dynamic data) {
-    if (!mounted) return;
+    if (!mounted || !_isEventForThisTable(data)) return;
     setState(() {
-      _billRequestedAt = data is Map ? (data['bill_requested_at'] ?? data['requested_at'] ?? '').toString() : null;
+      _billRequestedAt = data is Map
+          ? (data['bill_requested_at'] ?? data['requested_at'] ?? '')
+              .toString()
+          : null;
+      _sessionSettled = false;
+      _isLoadingBillState = false;
     });
   }
 
   void _handleSessionSettled(dynamic data) {
-    if (!mounted) return;
+    if (!mounted || !_isEventForThisTable(data)) return;
+    setState(() {
+      _billRequestedAt = null;
+      _sessionSettled = true;
+    });
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -121,7 +162,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
               Navigator.pop(ctx);
               UserSession.clearSession();
               Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const MenuScreen()),
+                MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')),
                     (route) => false,
               );
             },
@@ -134,16 +175,14 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
 
   @override
   void dispose() {
-    try {
-      _socket.disconnect();
-      _socket.dispose();
-    } catch (_) {}
+    GlobalSocketListener.instance.setOnBillRequested(null);
+    GlobalSocketListener.instance.setOnSessionClosed(GlobalSocketListener.instance.defaultOrderSessionClosed);
     super.dispose();
   }
 
   void _navigateToMenu() {
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (context) => const MenuScreen()),
+      MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')),
           (route) => false,
     );
   }
@@ -161,31 +200,124 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             _buildRestaurantHeader(),
             _buildTableContextStrip(tableString),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 12),
-                    _buildConfirmationSeal(),
-                    const SizedBox(height: 20),
-                    _buildIntroductionHeader(),
-                    const SizedBox(height: 12),
-                    _buildStatusBadge(),
-                    const SizedBox(height: 20),
-                    _buildBillSummaryCard(tableString),
-                    const SizedBox(height: 16),
-                    _buildSecurityContextNote(),
-                    const SizedBox(height: 28),
-                    _buildSecondaryActionButton(),
-                    const SizedBox(height: 16),
-                  ],
+              child: _isLoadingBillState && _billRequestedAt == null
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: Color(0xFF203F35),
+                      ),
+                    )
+                  : _sessionSettled
+                      ? _buildSettledView()
+                      : SingleChildScrollView(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24.0,
+                            vertical: 16.0,
+                          ),
+                          child: Column(
+                            children: [
+                              const SizedBox(height: 12),
+                              _buildConfirmationSeal(),
+                              const SizedBox(height: 20),
+                              _buildIntroductionHeader(),
+                              const SizedBox(height: 12),
+                              _buildStatusBadge(),
+                              const SizedBox(height: 20),
+                              _buildBillSummaryCard(tableString),
+                              const SizedBox(height: 16),
+                              _buildSecurityContextNote(),
+                              const SizedBox(height: 28),
+                              _buildSecondaryActionButton(),
+                              const SizedBox(height: 16),
+                            ],
+                          ),
+                        ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: _buildCustomerBottomNav(tableNum),
+    );
+  }
+
+  Widget _buildSettledView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: const Color(0xFFEAF0E9),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFFE5DFD3)),
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.verified,
+                  size: 38,
+                  color: Color(0xFF203F35),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'SESSION SETTLED',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFFA47C3D),
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Salamat sa paghain!',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF203F35),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Tapos na ang bill request para sa session na ito. Wala nang kailangang i-request muli.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: Color(0xFF788078),
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 28),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF203F35),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  elevation: 0,
+                ),
+                onPressed: _navigateToMenu,
+                child: const Text(
+                  'Back to Menu',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
                 ),
               ),
             ),
           ],
         ),
       ),
-      bottomNavigationBar: _buildCustomerBottomNav(tableNum),
     );
   }
 
@@ -476,7 +608,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
               context,
               MaterialPageRoute(
                 builder: (context) => OrderStatusScreen(
-                  orderId: UserSession.lastPlacedOrderId ?? 1042,
+                  orderId: UserSession.activeOrderId,
                   isTakeout: widget.isTakeout,
                   tableId: tableNum,
                   isAdditionalOrder: UserSession.isAdditionalOrder,

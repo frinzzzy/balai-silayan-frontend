@@ -15,4 +15,10 @@ class ApiConfig {
     }
     return liveBackendUrl;
   }
+
+  /// Supabase project URL at anon key — ginagamit para sa Realtime (order
+  /// notifications) kapag FCM ay hindi ginagamit. Puno ito ng iyong Supabase
+  /// credentials (hal. mula sa Supabase dashboard > Settings > API).
+  static const String supabaseUrl = 'https://drhhhgkvlkbcwdbrajlb.supabase.co';
+  static const String supabaseAnonKey = 'sb_publishable_EQUVCPZuJeyShOMVtvPVKw_FNqYqSrD';
 }

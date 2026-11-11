@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
 
 import 'menu_screen.dart';
 import 'qr_scanner_screen.dart';
 import 'user_session.dart';
 import 'order_status_screen.dart';
+import 'session_bill_screen.dart';
 import 'services/audio_notification_service.dart';
-import 'services/socket_service.dart';
+import 'services/global_socket_listener.dart';
+import 'services/order_context.dart';
+import 'services/order_event_bus.dart';
+import 'services/order_event_router.dart';
 import 'config/api_config.dart';
 
 class OrderTypeSelectionScreen extends StatefulWidget {
@@ -28,7 +33,6 @@ class OrderTypeSelectionScreen extends StatefulWidget {
 }
 
 class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
-  final SocketService _socketService = SocketService();
   bool _isAdditionalOrderSelected = false;
   bool _isLoadingSession = false;
   bool _isLoadingOrders = false;
@@ -38,93 +42,76 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
   int? _resolvedTableNumber;
 
   List<dynamic> _unfinishedOrders = [];
+  final Map<String, String> _polledStatuses = <String, String>{};
+  Timer? _pollTimer;
+  int? _refreshToken;
+  int? _contextToken;
+  bool _fetchInFlight = false;
+
+  bool _isLoadingBill = false;
+  int _ticketCount = 0;
+  int _requestedTicketCount = 0;
+  double _billTotal = 0.0;
 
   @override
   void initState() {
     super.initState();
+    GlobalSocketListener.instance.resetTableIdentity();
     _resolvedTableId = widget.tableId;
     _resolvedTableNumber = widget.tableNumber;
     UserSession.activeTableId = widget.tableId;
     UserSession.activeTableNumber = widget.tableNumber;
+
+    _contextToken = OrderContext.instance.enter(
+      mode: CustomerOrderMode.browsingTickets,
+    );
+    _refreshToken = OrderEventBus.instance.subscribeRefresh(() {
+      if (mounted) _fetchUnfinishedOrders(silent: true);
+    });
 
     if (widget.qrToken != null && widget.qrToken!.isNotEmpty) {
       _processQrScanToken(widget.qrToken!);
     } else {
       _fetchUnfinishedOrders();
     }
+
+    _fetchBillState();
     
     _initSocket();
+    _startPolling();
   }
 
   void _initSocket() {
-    _socketService.connect(
-      onOrderUpdated: _handleSocketUpdate,
-      onStatusUpdated: _handleSocketUpdate,
-      onSessionClosed: _handleSocketUpdate,
+    GlobalSocketListener.instance.start(context: context);
+    GlobalSocketListener.instance.registerTableIdentity(
+      tableId: _resolvedTableId,
+      tableNumber: _resolvedTableNumber,
     );
   }
 
-  void _handleSocketUpdate(dynamic event) {
-    if (!mounted || event == null) return;
-    
-    final Map<String, dynamic> payload = event is Map ? Map<String, dynamic>.from(event) : {};
-    final Map<String, dynamic> orderPayload = payload['order'] is Map ? Map<String, dynamic>.from(payload['order']) : payload;
-    
-    final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? payload['table_id']?.toString() ?? '');
-    
-    if (eventTableId != null && eventTableId != (_resolvedTableId ?? widget.tableId)) {
-      return; 
-    }
-    
-    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
-    final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
-    final String orderCode = eventOrderId != null ? UserSession.formatOrderCode(eventOrderId) : (orderPayload['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}');
-
-    if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
-      AudioNotificationService.showAggressiveBanner(
-        context: context,
-        title: "$orderCode: Payment Completed",
-        message: "Your table session receipt has been settled.",
-        backgroundColor: const Color(0xFF10B981),
-        icon: Icons.check_circle,
-      );
-    } else if (status == 'DECLINED' || status == 'REJECTED') {
-      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
-      AudioNotificationService.showAggressiveBanner(
-        context: context,
-        title: "$orderCode: Order Status: DECLINED",
-        message: "Reason: ${reason.isNotEmpty ? reason : "Please check with staff for details."}",
-        backgroundColor: const Color(0xFFEF4444),
-        icon: Icons.cancel,
-      );
-    } else if (status == 'PREPARING') {
-      AudioNotificationService.showAggressiveBanner(
-        context: context,
-        title: "$orderCode: Order Status: PREPARING",
-        message: "The kitchen is now preparing your delicious meal.",
-        backgroundColor: const Color(0xFFD7BC86),
-        icon: Icons.kitchen,
-      );
-    } else if (status == 'READY' || status == 'SERVED') {
-      AudioNotificationService.showAggressiveBanner(
-        context: context,
-        title: status == 'SERVED' ? "$orderCode: Order Status: SERVED" : "$orderCode: Order Status: READY",
-        message: status == 'SERVED' ? "Your order is hot and ready for your table." : "Your order is ready for pickup / service.",
-        backgroundColor: const Color(0xFF22C55E),
-        icon: Icons.restaurant,
-      );
-    }
-
-    Future.delayed(const Duration(milliseconds: 500), () {
+  /// Polling 10s: kahit patay ang socket, nagre-refresh pa rin ang listahan at
+  /// nadadetect ang pag-settle ng ticket (COMPLETED/PAID).
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (mounted) {
-        _fetchUnfinishedOrders(silent: false);
+        _fetchUnfinishedOrders(silent: true);
+        _fetchBillState(silent: true);
       }
     });
   }
 
   @override
   void dispose() {
-    _socketService.disconnect();
+    _pollTimer?.cancel();
+    if (_refreshToken != null) {
+      OrderEventBus.instance.unsubscribe(_refreshToken!);
+      _refreshToken = null;
+    }
+    if (_contextToken != null) {
+      OrderContext.instance.leave(_contextToken!);
+      _contextToken = null;
+    }
     super.dispose();
   }
 
@@ -159,37 +146,249 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
   }
 
   Future<void> _fetchUnfinishedOrders({bool silent = false}) async {
+    if (_fetchInFlight) return;
+    _fetchInFlight = true;
     final tId = _resolvedTableId ?? widget.tableId;
     if (!silent) setState(() => _isLoadingOrders = true);
 
     try {
-      final response = await http.get(
-        Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$tId'),
-      );
+      final response = await http
+          .get(Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$tId'))
+          .timeout(const Duration(seconds: 8));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final List ordersList = data['orders'] ?? data['data'] ?? [];
-        setState(() {
-          _unfinishedOrders = ordersList;
-          if (_unfinishedOrders.isEmpty) {
-            _isAdditionalOrderSelected = false;
+
+        final Set<String> seen = <String>{};
+        for (final dynamic raw in ordersList) {
+          if (raw is! Map) continue;
+          final dynamic orderId = raw['order_id'] ?? raw['id'];
+          final String status =
+              (raw['order_status'] ?? raw['status'] ?? '').toString().toUpperCase();
+          if (orderId == null || status.isEmpty) continue;
+          final String key = orderId.toString();
+          seen.add(key);
+          final String? previous = _polledStatuses[key];
+          _polledStatuses[key] = status;
+          if (previous != null && previous != status) {
+            OrderEventRouter.instance.onStatusObserved(
+              status: status,
+              orderId: orderId,
+              reason: raw['decline_reason']?.toString() ?? raw['reason']?.toString(),
+              parentOrderId: raw['parent_order_id'],
+              eventType: 'poll',
+            );
           }
-        });
+        }
+
+        // Ang na-settle (COMPLETED) na ticket ay mawawala sa listahan. I-check
+        // ang final status para may banner pa rin kahit walang socket.
+        for (final String id in _polledStatuses.keys.where((k) => !seen.contains(k)).toList()) {
+          await _checkVanishedOrder(id);
+        }
+
+        if (mounted) {
+          setState(() {
+            _unfinishedOrders = ordersList;
+            if (_unfinishedOrders.isEmpty) {
+              _isAdditionalOrderSelected = false;
+            }
+          });
+        }
       }
     } catch (_) {
-      setState(() {
-        _unfinishedOrders = [];
-        _isAdditionalOrderSelected = false;
-      });
+      if (mounted) {
+        setState(() {
+          _unfinishedOrders = [];
+          _isAdditionalOrderSelected = false;
+        });
+      }
     } finally {
+      _fetchInFlight = false;
       if (mounted && !silent) setState(() => _isLoadingOrders = false);
     }
   }
 
+  Future<void> _fetchBillState({bool silent = false}) async {
+    if (_isLoadingBill) return;
+    final int tId = _resolvedTableId ?? widget.tableId;
+    if (!silent) setState(() => _isLoadingBill = true);
+
+    try {
+      final response = await http
+          .get(Uri.parse('$_baseUrl/api/v1/tables/$tId/bill'))
+          .timeout(const Duration(seconds: 8));
+
+      if (response.statusCode == 200 && mounted) {
+        final dynamic decoded = jsonDecode(response.body);
+        final Map<String, dynamic> data =
+            decoded is Map && decoded['data'] is Map
+                ? Map<String, dynamic>.from(decoded['data'])
+                : <String, dynamic>{};
+        final List orders = data['orders'] is List ? data['orders'] : [];
+
+        int requested = 0;
+        double total = 0.0;
+        for (final dynamic raw in orders) {
+          if (raw is! Map) continue;
+          final dynamic orderId = raw['order_id'] ?? raw['id'];
+          final dynamic requestedAt = raw['bill_requested_at'];
+          total += double.tryParse(
+                  (raw['order_total'] ?? raw['total_amount'] ?? '0')
+                      .toString()) ??
+              0.0;
+          if (requestedAt != null) {
+            requested++;
+            UserSession.setTicketBillRequested(orderId, requestedAt);
+          } else {
+            UserSession.clearTicketBillRequested(orderId);
+          }
+        }
+
+        setState(() {
+          _ticketCount = orders.length;
+          _requestedTicketCount = requested;
+          _billTotal = total;
+          _isLoadingBill = false;
+        });
+        return;
+      }
+
+      if (mounted) setState(() => _isLoadingBill = false);
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingBill = false);
+    }
+  }
+
+  Future<void> _openBillScreen() async {
+    final int tableNum =
+        _resolvedTableNumber ?? _resolvedTableId ?? widget.tableId;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SessionBillScreen(
+          tableId: _resolvedTableId ?? tableNum,
+          isTakeout: UserSession.isTakeout,
+        ),
+      ),
+    );
+    if (mounted) {
+      _fetchBillState(silent: true);
+      _fetchUnfinishedOrders(silent: true);
+    }
+  }
+
+  Future<void> _checkVanishedOrder(String orderId) async {
+    try {
+      final response = await http
+          .get(Uri.parse('$_baseUrl/api/v1/orders/$orderId'))
+          .timeout(const Duration(seconds: 6));
+      if (response.statusCode != 200) {
+        _polledStatuses.remove(orderId);
+        return;
+      }
+      final dynamic decoded = jsonDecode(response.body);
+      final dynamic rawOrder = decoded is Map
+          ? (decoded['data']?['order'] ?? decoded['data'] ?? decoded['order'])
+          : null;
+      if (rawOrder is! Map) {
+        _polledStatuses.remove(orderId);
+        return;
+      }
+      final String status =
+          (rawOrder['order_status'] ?? rawOrder['status'] ?? '').toString().toUpperCase();
+      final String previous = _polledStatuses[orderId] ?? '';
+      if (status.isNotEmpty && status != previous) {
+        OrderEventRouter.instance.onStatusObserved(
+          status: status,
+          orderId: rawOrder['order_id'] ?? rawOrder['id'] ?? orderId,
+          reason: rawOrder['decline_reason']?.toString() ?? rawOrder['reason']?.toString(),
+          parentOrderId: rawOrder['parent_order_id'],
+          eventType: 'poll',
+        );
+      }
+      _polledStatuses[orderId] = status;
+    } catch (_) {
+      _polledStatuses.remove(orderId);
+    }
+  }
+
+  /// Statuses kung saan hindi na pwedeng mag-Additional Order ang ticket. Kapag
+  /// ganito ang status ng parent order, magpi-popup ang customer na magpapatanto
+  /// na gusto pang mag-continue (as NEW ORDER) bago mag-proceed.
+  bool _isBlockedAdditionalOrderStatus(String status) {
+    final String normalized = status.trim().toUpperCase();
+    return const <String>[
+      'PREPARING',
+      'READY',
+      'SERVED',
+      'PAID',
+      'COMPLETED',
+      'DONE',
+    ].contains(normalized);
+  }
+
+  Future<bool?> _showAdditionalOrderTransitionDialog({
+    required dynamic orderId,
+    required String status,
+  }) async {
+    final String orderCode = UserSession.formatOrderCode(orderId);
+    return await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFFFFFDFA),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          title: const Text(
+            'Additional Order Not Allowed',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF203F35),
+            ),
+          ),
+          content: Text(
+            'Order #$orderCode is currently $status, so it can no longer accept additional items. '
+            'If you continue, your items will be placed as a NEW order instead.\n\n'
+            'Are you sure you want to continue?',
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color(0xFF788078),
+              height: 1.4,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF788078)),
+              ),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF203F35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text(
+                'Continue as New Order',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _navigateToMenu() async {
     final bool hasUnfinished = _unfinishedOrders.isNotEmpty;
-    final bool isAdditional = _isAdditionalOrderSelected && hasUnfinished;
+    bool isAdditional = _isAdditionalOrderSelected && hasUnfinished;
 
     UserSession.activeTableId = _resolvedTableId ?? widget.tableId;
     UserSession.activeTableNumber = _resolvedTableNumber ?? widget.tableNumber;
@@ -206,7 +405,29 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
       if (selectedOrder == null) return;
 
       final rawParentId = selectedOrder['id'] ?? selectedOrder['order_id'];
-      UserSession.targetParentOrderId = rawParentId?.toString();
+      final parentStatus =
+          (selectedOrder['order_status'] ?? selectedOrder['status'] ?? 'PENDING')
+              .toString()
+              .toUpperCase();
+
+      if (_isBlockedAdditionalOrderStatus(parentStatus)) {
+        final bool? confirmed = await _showAdditionalOrderTransitionDialog(
+          orderId: rawParentId,
+          status: parentStatus,
+        );
+
+        if (confirmed != true) return;
+
+        // Confirmed by the customer: i-continue ito bilang brand-new order.
+        isAdditional = false;
+        UserSession.isAdditionalOrder = false;
+        UserSession.targetParentOrderId = null;
+        UserSession.lastPlacedOrderId = null;
+        UserSession.firstOrderId = null;
+      } else {
+        UserSession.isAdditionalOrder = true;
+        UserSession.targetParentOrderId = rawParentId?.toString();
+      }
     } else {
       UserSession.isAdditionalOrder = false;
       UserSession.targetParentOrderId = null;
@@ -308,6 +529,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
           tableNumber: _resolvedTableNumber ?? widget.tableNumber,
           isAdditionalOrder: isAdditional,
         ),
+        settings: const RouteSettings(name: 'menu'),
       ),
     );
   }
@@ -416,17 +638,25 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
               child: _buildRestaurantHeader(),
             ),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24.0,
-                  vertical: 8.0,
-                ),
-                child: _buildStepContent(),
+              // Nested Column dito para hindi maa-overflow ang body Column mismo
+              // (header + scroll + sticky button na lahat fixed/flex mix).
+              child: Column(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24.0,
+                        vertical: 8.0,
+                      ),
+                      child: _buildStepContent(),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: _buildPrimaryActionButton(),
+                  ),
+                ],
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: _buildPrimaryActionButton(),
             ),
           ],
         ),
@@ -481,6 +711,8 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
         _buildNewOrderOptionCard(),
         const SizedBox(height: 14),
         _buildAdditionalOrderOptionCard(hasUnfinished: hasUnfinished),
+        const SizedBox(height: 14),
+        _buildRequestBillCard(),
         const SizedBox(height: 20),
         _buildContextNoteBox(),
       ],
@@ -824,6 +1056,88 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
                   color: isSelected
                       ? const Color(0xFFCBD7CF)
                       : const Color(0xFF788078),
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRequestBillCard() {
+    final bool hasOrders = _ticketCount > 0;
+    final bool allRequested = hasOrders && _requestedTicketCount == _ticketCount;
+
+    return Opacity(
+      opacity: hasOrders ? 1.0 : 0.5,
+      child: InkWell(
+        onTap: hasOrders ? _openBillScreen : null,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFFDFA),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: allRequested
+                  ? const Color(0xFF53766C)
+                  : const Color(0xFFE5DFD3),
+              width: 1.5,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Icon(
+                    allRequested
+                        ? Icons.check_circle
+                        : Icons.receipt_long_outlined,
+                    color: allRequested
+                        ? const Color(0xFF53766C)
+                        : const Color(0xFF203F35),
+                    size: 26,
+                  ),
+                  if (_isLoadingBill)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Text(
+                      '$_requestedTicketCount/$_ticketCount',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF53766C),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(
+                allRequested ? 'Bill Requested' : 'Request Bill',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF203F35),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                !hasOrders
+                    ? 'Wala pang order sa session na ito.'
+                    : allRequested
+                        ? 'Naka-request na ang bill para sa lahat ng ticket. Ask staff to reopen ordering kung kailangan ng dagdag.'
+                        : 'Pumili ng ticket na ire-request ang bill. Session total: ₱${_billTotal.toStringAsFixed(2)}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF788078),
                   height: 1.4,
                 ),
               ),

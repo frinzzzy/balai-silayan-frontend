@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
-import '../models/user_session.dart';
 
 class OrderProvider extends ChangeNotifier {
   bool _isLoading = false;

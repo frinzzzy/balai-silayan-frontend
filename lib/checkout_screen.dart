@@ -7,6 +7,7 @@ import 'order_status_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'menu_screen.dart';
 import 'user_session.dart';
+import 'services/order_context.dart';
 import 'services/socket_service.dart';
 import 'config/api_config.dart';
 
@@ -134,7 +135,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           Uri.parse('$_baseUrl/api/v1/dev/force-active-session'),
           headers: {"Content-Type": "application/json"},
           body: jsonEncode({"table_id": targetTableId}),
-        );
+        ).timeout(const Duration(seconds: 15));
         if (sessionRes.statusCode == 200) {
           final resData = jsonDecode(sessionRes.body);
           final data = resData['data'];
@@ -155,7 +156,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     // AUTO-HEAL: Kung isAdditional ay true ngunit walang targetParentOrderId, kumuha mula sa unfinished orders ng table
     if (isAdditional && (UserSession.targetParentOrderId == null || UserSession.targetParentOrderId!.isEmpty)) {
       try {
-        final res = await http.get(Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$targetTableId'));
+        final res = await http.get(Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$targetTableId')).timeout(const Duration(seconds: 10));
         if (res.statusCode == 200) {
           final decoded = jsonDecode(res.body);
           final List orders = decoded['orders'] ?? decoded['data'] ?? [];
@@ -207,7 +208,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         Uri.parse('$_baseUrl/api/v1/orders'),
         headers: reqHeaders,
         body: jsonEncode(transactionBody),
-      );
+      ).timeout(const Duration(seconds: 20));
 
       debugPrint('API Response Status: ${response.statusCode}');
       debugPrint('API Response Body: ${response.body}');
@@ -233,6 +234,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           targetTableId: targetTableId,
           targetSessionId: targetSessionId,
           initialOrderItems: initialOrderItems ?? orderItemsPayload,
+          linkedParentOrderId: finalParentId,
         );
 
         if (mounted) {
@@ -253,6 +255,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ? (errorBody['message']?.toString() ??
             'Backend returned status code ${response.statusCode}')
             : 'Backend returned status code ${response.statusCode}';
+        final String? errorCode =
+            errorBody is Map ? errorBody['code']?.toString() : null;
+
+        if (response.statusCode == 409 && errorCode == 'BILL_ALREADY_REQUESTED') {
+          setState(() => _isSubmitting = false);
+          _showBillLockedDialog(errorMessage);
+          return;
+        }
 
         if (response.statusCode == 401 || response.statusCode == 403 ||
             (errorMessage.toLowerCase().contains('session') &&
@@ -292,6 +302,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     targetTableId: targetTableId,
                     targetSessionId: newSessionId,
                     initialOrderItems: orderItemsPayload,
+                    linkedParentOrderId: finalParentId,
                   );
 
                   if (mounted) {
@@ -337,6 +348,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 targetTableId: targetTableId,
                 targetSessionId: targetSessionId,
                 initialOrderItems: orderItemsPayload,
+                linkedParentOrderId: null,
               );
 
               if (mounted) {
@@ -365,8 +377,26 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     setState(() => _isSubmitting = false);
 
     final String lowerErr = errorDetails.toLowerCase();
-    if (widget.isAdditionalOrder || lowerErr.contains('complete') || lowerErr.contains('closed') || lowerErr.contains('settled') || lowerErr.contains('finished') || lowerErr.contains('not active') || lowerErr.contains('failed to create order') || lowerErr.contains('parent order')) {
-      UserSession.clearSession();
+    final bool isSessionGone = lowerErr.contains('complete') ||
+        lowerErr.contains('closed') ||
+        lowerErr.contains('settled') ||
+        lowerErr.contains('finished') ||
+        lowerErr.contains('not active');
+    final bool isParentGone = lowerErr.contains('parent order') ||
+        lowerErr.contains('failed to create order');
+
+    if (isSessionGone || isParentGone) {
+      // ⚠️ Huwag agad i-clear ang buong session: lang ang mismong session ang
+      // dapat i-close. Kapag nawala lang ang parent ticket (ex. completed ang
+      // older ticket), i-reset lang ang additional flags.
+      if (isSessionGone) {
+        UserSession.clearSession();
+      } else {
+        UserSession.isAdditionalOrder = false;
+        UserSession.targetParentOrderId = null;
+        UserSession.firstOrderId = null;
+        OrderContext.instance.reset();
+      }
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -374,7 +404,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           backgroundColor: const Color(0xFFFFFDFA),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           title: const Text('Session Complete', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
-          content: const Text('Can’t be ordered because this session is complete. Please back to order choices.'),
+          content: Text(
+            isSessionGone
+                ? 'Can’t be ordered because this session is complete. Please back to order choices.'
+                : 'The previous ticket has already been finished. Back to order choices para magpatuloy ng bagong order.',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+          ),
           actions: [
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
@@ -409,6 +444,44 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  void _showBillLockedDialog(String message) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Bill already requested',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+        ),
+        content: Text(
+          message.isNotEmpty
+              ? message
+              : 'Naka-request na ang bill para sa ticket na ito. Ask staff to reopen ordering bago magdagdag ng items.',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              if (Navigator.canPop(context)) Navigator.pop(context);
+            },
+            child: const Text(
+              'Back to Menu',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _navigateToStatusTracking(
     dynamic orderId, {
     List<dynamic>? initialOrderItems,
@@ -438,6 +511,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     required int targetTableId,
     required int? targetSessionId,
     List<dynamic>? initialOrderItems,
+    dynamic linkedParentOrderId,
   }) {
     int? sanitizedOrderId = int.tryParse(generatedOrderId?.toString() ?? '');
 
@@ -466,8 +540,26 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       UserSession.lastPlacedOrderItems = initialOrderItems;
     }
 
-    if (isAdditional) {
-      UserSession.targetParentOrderId = generatedOrderId?.toString();
+    // ⚠️ HUWAG i-overwrite ang targetParentOrderId ng bagong order id.
+    // Dati: `targetParentOrderId = generatedOrderId` kaya hindi tumatama ang
+    // pag-detect ng "finished parent ticket". Ngayon, ang parent ticket (hal.
+    // 108) ang naka-store, at ang bagong order ay nasa `lastPlacedOrderId`.
+    final String? linkedParent = linkedParentOrderId?.toString().trim();
+    final bool hasParent = linkedParent != null && linkedParent.isNotEmpty && linkedParent != 'null';
+    if (hasParent) {
+      UserSession.isAdditionalOrder = true;
+      UserSession.targetParentOrderId = linkedParent;
+      OrderContext.instance.enter(
+        mode: CustomerOrderMode.additionalOrder,
+        activeOrderId: sanitizedOrderId,
+        linkedParentId: linkedParent,
+      );
+    } else {
+      UserSession.isAdditionalOrder = false;
+      OrderContext.instance.enter(
+        mode: CustomerOrderMode.newOrder,
+        activeOrderId: sanitizedOrderId,
+      );
     }
 
     try {

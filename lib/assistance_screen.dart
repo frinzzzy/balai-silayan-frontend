@@ -531,14 +531,14 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           _buildNavItem(Icons.restaurant, 'Menu', onTap: () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen()));
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')));
           }),
           _buildNavItem(Icons.receipt_long_outlined, 'Orders', onTap: () {
-            Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: 1042, isTakeout: widget.isTakeout, tableId: widget.tableId)));
+            Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: UserSession.activeOrderId, isTakeout: widget.isTakeout, tableId: widget.tableId)));
           }),
           _buildNavItem(Icons.notifications, 'Help', isActive: true, onTap: () {}),
           _buildNavItem(Icons.account_balance_wallet_outlined, 'Pay', onTap: () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen()));
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')));
           }),
         ],
       ),

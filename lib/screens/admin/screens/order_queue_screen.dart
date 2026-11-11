@@ -6,17 +6,25 @@ import '../services/admin_service.dart';
 import '../../../config/api_config.dart';
 import 'receipt_ticket_dialog.dart';
 import 'payment_dialog_widget.dart';
+import '../../../theme/app_theme.dart';
+import '../../../theme/admin_tokens.dart';
+import '../../../widgets/status_chip.dart';
+import '../../../widgets/empty_state.dart';
 
 class OrderQueueScreen extends StatefulWidget {
   final List<AdminOrder> orders;
   final Function(int orderId, String targetStatus, {String? paymentMethod, String? declineReason}) onActionTriggered;
+  final Future<void> Function(int orderId)? onReopenBill;
   final VoidCallback onRefresh;
+  final DailySalesStats? stats;
 
   const OrderQueueScreen({
     super.key,
     required this.orders,
     required this.onActionTriggered,
+    this.onReopenBill,
     required this.onRefresh,
+    this.stats,
   });
 
   @override
@@ -28,6 +36,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
   int? _selectedTableFilter;
   String _searchQuery = '';
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
 
   int _getStatusPriority(String status) {
     switch (status.toUpperCase()) {
@@ -54,6 +63,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -65,27 +75,27 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFFFFFDFA),
+          backgroundColor: AdminTheme.surfaceIvory,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFFE5DFD3)),
+            side: const BorderSide(color: AdminTheme.border),
           ),
-          title: const Text('Decline Order', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+          title: const Text('Decline Order', style: TextStyle(fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Select a preset reason or type your custom message:', style: TextStyle(fontSize: 12, color: Color(0xFF687368))),
+              const Text('Select a preset reason or type your custom message:', style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark)),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: presets.map((preset) => ActionChip(
                   label: Text(preset, style: const TextStyle(fontSize: 11)),
-                  backgroundColor: const Color(0xFFFFFDFA),
+                  backgroundColor: AdminTheme.surfaceIvory,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(100),
-                    side: const BorderSide(color: Color(0xFFE5DFD3)),
+                    side: const BorderSide(color: AdminTheme.border),
                   ),
                   onPressed: () {
                     reasonController.text = preset;
@@ -99,18 +109,18 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                 maxLines: 2,
                 decoration: InputDecoration(
                   labelText: 'Decline Reason',
-                  labelStyle: const TextStyle(color: Color(0xFF687368)),
+                  labelStyle: const TextStyle(color: AdminTheme.mutedDark),
                   hintText: 'e.g. Out of stock na po ang napiling ulam',
-                  hintStyle: const TextStyle(color: Color(0xFF687368)),
+                  hintStyle: const TextStyle(color: AdminTheme.mutedDark),
                   filled: true,
-                  fillColor: const Color(0xFFFFFDFA),
+                  fillColor: AdminTheme.surfaceIvory,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: Color(0xFFE5DFD3)),
+                    borderSide: const BorderSide(color: AdminTheme.border),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: Color(0xFFE5DFD3)),
+                    borderSide: const BorderSide(color: AdminTheme.border),
                   ),
                 ),
               ),
@@ -119,11 +129,11 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel', style: TextStyle(color: Color(0xFF687368))),
+              child: const Text('Cancel', style: TextStyle(color: AdminTheme.mutedDark)),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8E5136),
+                backgroundColor: AdminTheme.danger,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
               onPressed: () {
@@ -152,7 +162,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
       builder: (ctx) => PaymentDialog(
         order: order,
         paymentMethod: paymentMethod,
-        onPaymentConfirmed: (netTotal, paid, change, discountType) async {
+        onPaymentConfirmed: (netTotal, paid, change, discountType, partySize, pwdCount, customerName, idNumber) async {
           try {
             final String? authToken = AdminService.staffAuthToken;
 
@@ -195,6 +205,11 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
               change: change,
               discountType: discountType,
               paymentMethod: paymentMethod,
+              partySize: partySize,
+              pwdCount: pwdCount,
+              customerName: customerName,
+              idNumber: idNumber,
+              cashierName: AdminService.staffName ?? 'Staff',
             ),
           );
         },
@@ -206,22 +221,129 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFFFFFDFA),
+        backgroundColor: AdminTheme.surfaceIvory,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
-        content: Text(message, style: const TextStyle(fontSize: 13, color: Color(0xFF4A5568))),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
+        content: Text(message, style: const TextStyle(fontSize: 13, color: AdminTheme.infoText)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: Color(0xFF788078))),
+            child: const Text('Cancel', style: TextStyle(color: AdminTheme.mutedGray)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            style: ElevatedButton.styleFrom(backgroundColor: AdminTheme.textDark),
             onPressed: () {
               Navigator.pop(ctx);
               onConfirm();
             },
             child: const Text('Confirm', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String get _serviceLabel {
+    final int hour = DateTime.now().hour;
+    if (hour < 11) return 'BREAKFAST SERVICE';
+    if (hour < 16) return 'LUNCH SERVICE';
+    return 'DINNER SERVICE';
+  }
+
+  String get _dateLabel => '${DateTime.now().month}/${DateTime.now().day}/${DateTime.now().year}';
+
+  Widget _buildKpiStrip() {
+    final int activeCount = widget.orders.where((o) {
+      final st = o.status.toUpperCase();
+      return st != 'PAID' && st != 'COMPLETED' && st != 'DECLINED' && st != 'CANCELLED' && st != 'REJECTED';
+    }).length;
+
+    final double totalSales = widget.stats?.totalSales ?? 0;
+    final int pendingCount = widget.orders.where((o) => o.status.toUpperCase() == 'PENDING').length;
+
+    final List<Widget> kpis = [
+      _buildKpiCard(
+        icon: Icons.attach_money_rounded,
+        label: 'GROSS SALES TODAY',
+        value: '₱${totalSales.toStringAsFixed(2)}',
+        iconBg: AdminTheme.successBg,
+        iconFg: AdminTheme.successFg,
+      ),
+      _buildKpiCard(
+        icon: Icons.receipt_long_rounded,
+        label: 'ACTIVE ORDERS',
+        value: '$activeCount',
+        iconBg: AdminTheme.warningBg,
+        iconFg: AdminTheme.bronzeGold,
+      ),
+      _buildKpiCard(
+        icon: Icons.hourglass_top_rounded,
+        label: 'PENDING',
+        value: '$pendingCount',
+        iconBg: AdminTheme.preparingBg,
+        iconFg: AdminTheme.priorityFg,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth > 720) {
+          return Row(
+            children: [
+              for (final kpi in kpis) Expanded(child: kpi),
+            ],
+          );
+        }
+        return Column(
+          children: [for (final kpi in kpis) kpi],
+        );
+      },
+    );
+  }
+
+  Widget _buildKpiCard({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color iconBg,
+    required Color iconFg,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AdminTheme.surfaceIvory,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AdminTheme.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: iconBg.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, size: 19, color: iconFg),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.0, color: AdminTheme.mutedDark),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: const TextStyle(fontFamily: 'Libre Baskerville', fontSize: 20, fontWeight: FontWeight.w400, color: AdminTheme.textDark),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -261,42 +383,44 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
     });
 
     return Container(
-      color: const Color(0xFFF8F4EC),
+      color: AdminTheme.background,
       child: Stack(
         children: [
           RefreshIndicator(
-        color: const Color(0xFF203F35),
+        color: AdminTheme.textDark,
         onRefresh: () async => widget.onRefresh(),
         child: ListView(
           controller: _scrollController,
           padding: const EdgeInsets.all(20),
           children: [
-            const Text(
-              'LUNCH SERVICE • 8 OCT 2026',
-              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFA47C3D), letterSpacing: 1.2),
+            Text(
+              '$_serviceLabel • $_dateLabel',
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AdminTheme.bronzeGold, letterSpacing: 1.2),
             ),
             const SizedBox(height: 6),
             const Text(
               'Order queue',
-              style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 28, fontWeight: FontWeight.w400, color: Color(0xFF203F35)),
+              style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 28, fontWeight: FontWeight.w400, color: AdminTheme.textDark),
             ),
             const SizedBox(height: 4),
             const Text(
               'Review requests and keep every table moving with care.',
-              style: TextStyle(fontSize: 14, color: Color(0xFF687368), height: 1.5),
+              style: TextStyle(fontSize: 14, color: AdminTheme.mutedDark, height: 1.5),
             ),
             const SizedBox(height: 16),
+
+            _buildKpiStrip(),
 
             if (priorityTop3.isNotEmpty) ...[
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF203F35),
+                  color: AdminTheme.textDark,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Row(
                   children: const [
-                    Icon(Icons.stars_rounded, color: Color(0xFFC3AA7F), size: 18),
+                    Icon(Icons.stars_rounded, color: AdminTheme.goldAccent, size: 18),
                     SizedBox(width: 8),
                     Text(
                       'TOP PRIORITY • EARLIEST ACTIVE ORDERS',
@@ -316,29 +440,37 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                 AdminOrder order = entry.value;
                 return _buildOrderCard(context, order, priorityRank: rank);
               }),
-              const Divider(height: 32, thickness: 1.5, color: Color(0xFFE5DFD3)),
+              const Divider(height: 32, thickness: 1.5, color: AdminTheme.border),
             ],
 
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14),
               height: 48,
               decoration: BoxDecoration(
-                color: const Color(0xFFFFFDFA),
+                color: AdminTheme.surfaceIvory,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFE5DFD3)),
+                border: Border.all(color: AdminTheme.border),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.search, size: 20, color: Color(0xFF687368)),
+                  const Icon(Icons.search, size: 20, color: AdminTheme.mutedDark),
                   const SizedBox(width: 10),
                   Expanded(
                     child: TextField(
+                      controller: _searchController,
                       onChanged: (val) => setState(() => _searchQuery = val),
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF203F35)),
-                      decoration: const InputDecoration(
+                      style: const TextStyle(fontSize: 13, color: AdminTheme.textDark),
+                      decoration: InputDecoration(
                         hintText: 'Search code, table or dish',
-                        hintStyle: TextStyle(fontSize: 13, color: Color(0xFF687368)),
+                        hintStyle: const TextStyle(fontSize: 13, color: AdminTheme.mutedDark),
                         border: InputBorder.none,
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.close, size: 16, color: AdminTheme.mutedDark),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                        ),
                       ),
                     ),
                   ),
@@ -358,16 +490,16 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                       label: Text(filter),
                       selected: isSelected,
                       onSelected: (selected) => setState(() => _selectedStatusFilter = filter),
-                      selectedColor: const Color(0xFF203F35),
-                      backgroundColor: const Color(0xFFFFFDFA),
+                      selectedColor: AdminTheme.deepGreen,
+                      backgroundColor: AdminTheme.surfaceIvory,
                       labelStyle: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: isSelected ? Colors.white : const Color(0xFF687368),
+                        color: isSelected ? Colors.white : AdminTheme.mutedDark,
                       ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(100),
-                        side: const BorderSide(color: Color(0xFFE5DFD3)),
+                        side: BorderSide(color: isSelected ? AdminTheme.deepGreen : AdminTheme.border),
                       ),
                     ),
                   );
@@ -379,32 +511,32 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFFDFA),
+                color: AdminTheme.surfaceIvory,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFE5DFD3)),
+                border: Border.all(color: AdminTheme.border),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.table_restaurant, size: 18, color: Color(0xFF687368)),
+                  const Icon(Icons.table_restaurant, size: 18, color: AdminTheme.mutedDark),
                   const SizedBox(width: 8),
                   Expanded(
                     child: DropdownButtonHideUnderline(
                       child: DropdownButton<int?>(
                         value: _selectedTableFilter,
                         isExpanded: true,
-                        style: const TextStyle(fontSize: 13, color: Color(0xFF203F35)),
-                        dropdownColor: const Color(0xFFFFFDFA),
-                        hint: const Text('All tables', style: TextStyle(fontSize: 13, color: Color(0xFF203F35), fontWeight: FontWeight.w600)),
+                        style: const TextStyle(fontSize: 13, color: AdminTheme.textDark),
+                        dropdownColor: AdminTheme.surfaceIvory,
+                        hint: const Text('All tables', style: TextStyle(fontSize: 13, color: AdminTheme.textDark, fontWeight: FontWeight.w600)),
                         items: [
                           const DropdownMenuItem<int?>(
                             value: null,
-                            child: Text('All tables', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+                            child: Text('All tables', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
                           ),
                           ...List.generate(15, (index) {
                             final tableNum = index + 1;
                             return DropdownMenuItem<int?>(
                               value: tableNum,
-                              child: Text('Table ${tableNum.toString().padLeft(2, '0')}', style: const TextStyle(fontSize: 13, color: Color(0xFF203F35))),
+                              child: Text('Table ${tableNum.toString().padLeft(2, '0')}', style: const TextStyle(fontSize: 13, color: AdminTheme.textDark)),
                             );
                           }),
                         ],
@@ -414,7 +546,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                   ),
                   if (_selectedTableFilter != null)
                     IconButton(
-                      icon: const Icon(Icons.clear, size: 16, color: Color(0xFF687368)),
+                      icon: const Icon(Icons.clear, size: 16, color: AdminTheme.mutedDark),
                       onPressed: () => setState(() => _selectedTableFilter = null),
                     ),
                 ],
@@ -425,18 +557,18 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFFF5EBD7),
+                color: AdminTheme.warningBg,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: const [
-                  Icon(Icons.warning_amber_rounded, size: 18, color: Color(0xFFA47C3D)),
+                  Icon(Icons.warning_amber_rounded, size: 18, color: AdminTheme.bronzeGold),
                   SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       'Requests await review. Pending does not mean accepted; kitchen and payment states are separate.',
-                      style: TextStyle(fontSize: 12, height: 1.5, color: Color(0xFF846228)),
+                      style: TextStyle(fontSize: 12, height: 1.5, color: AdminTheme.warningFg),
                     ),
                   ),
                 ],
@@ -449,27 +581,20 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
               children: [
                 Text(
                   'All Orders (${sortedOrders.length})',
-                  style: const TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: Color(0xFF203F35)),
+                  style: const TextStyle(fontFamily: 'Libre Baskerville', fontSize: 18, color: AdminTheme.textDark),
                 ),
                 const Text(
                   'Pending first ↓',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF687368)),
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AdminTheme.mutedDark),
                 ),
               ],
             ),
             const SizedBox(height: 12),
 
             if (sortedOrders.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(32),
-                alignment: Alignment.center,
-                child: Column(
-                  children: [
-                    const Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFF687368)),
-                    const SizedBox(height: 12),
-                    const Text('No additional orders match current filter.', style: TextStyle(color: Color(0xFF687368), fontWeight: FontWeight.bold)),
-                  ],
-                ),
+              const EmptyState(
+                icon: Icons.receipt_long_outlined,
+                title: 'No additional orders match current filter.',
               )
             else
               ...sortedOrders.map((order) => _buildOrderCard(context, order)),
@@ -484,7 +609,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           //   right: 16,
           //   bottom: 16,
           //   child: Material(
-          //     color: const Color(0xFF8A6D3B),
+          //     color: AdminTheme.priorityFg,
           //     borderRadius: BorderRadius.circular(14),
           //     child: InkWell(
           //       onTap: () => setState(() => _selectedStatusFilter = 'Bill Requested'),
@@ -522,18 +647,29 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
     );
   }
 
-  Widget _buildOrderCard(BuildContext context, AdminOrder order, {int? priorityRank}) {
-    Color cardBg = const Color(0xFFFFFDFA);
-    Color statusBg = const Color(0xFFF5EBD7);
-    Color statusFg = const Color(0xFFA47C3D);
-
-    if (order.status.toUpperCase() == 'PREPARING') {
-      statusBg = const Color(0xFFF7EAE4);
-      statusFg = const Color(0xFF8E5136);
-    } else if (order.status.toUpperCase() == 'READY' || order.status.toUpperCase() == 'SERVED' || order.status.toUpperCase() == 'PAID' || order.status.toUpperCase() == 'COMPLETED') {
-      statusBg = const Color(0xFFEAF0E9);
-      statusFg = const Color(0xFF53766C);
+  Color _statusColor(String status) {
+    switch (status.toUpperCase()) {
+      case 'PENDING':
+      case 'NEW':
+        return AdminTokens.warning;
+      case 'PREPARING':
+        return AdminTheme.infoText;
+      case 'READY':
+      case 'SERVED':
+      case 'PAID':
+      case 'COMPLETED':
+        return AdminTokens.success;
+      case 'REJECTED':
+      case 'DECLINED':
+      case 'CANCELLED':
+        return AdminTokens.danger;
+      default:
+        return AdminTheme.mutedGray;
     }
+  }
+
+  Widget _buildOrderCard(BuildContext context, AdminOrder order, {int? priorityRank}) {
+    Color cardBg = AdminTheme.surfaceIvory;
 
     bool isPriority = priorityRank != null;
 
@@ -544,13 +680,22 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
         color: cardBg,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isPriority ? const Color(0xFFC3AA7F) : const Color(0xFFE5DFD3),
+          color: isPriority ? AdminTheme.goldAccent : AdminTheme.border,
           width: isPriority ? 2.0 : 1.0,
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Container(
+            width: 4,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _statusColor(order.status),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(height: 12),
           // TEMP DISABLED (Bill Request feature on hold)
           // if (isBillRequested) ...[
           //   Container(
@@ -558,17 +703,17 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           //     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           //     margin: const EdgeInsets.only(bottom: 10),
           //     decoration: BoxDecoration(
-          //       color: const Color(0xFFF5EBD7),
+          //       color: AdminTheme.warningBg,
           //       borderRadius: BorderRadius.circular(6),
-          //       border: Border.all(color: const Color(0xFFA47C3D)),
+          //       border: Border.all(color: AdminTheme.bronzeGold),
           //     ),
           //     child: const Row(
           //       children: [
-          //         Icon(Icons.receipt_long, size: 14, color: Color(0xFF846228)),
+          //         Icon(Icons.receipt_long, size: 14, color: AdminTheme.warningFg),
           //         SizedBox(width: 6),
           //         Text(
           //           '🧾 BILL REQUESTED BY CUSTOMER',
-          //           style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF846228), letterSpacing: 0.8),
+          //           style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AdminTheme.warningFg, letterSpacing: 0.8),
           //         ),
           //       ],
           //     ),
@@ -582,7 +727,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
-                  color: isPriority ? const Color(0xFF8A6D3B) : const Color(0xFF687368),
+                  color: isPriority ? AdminTheme.priorityFg : AdminTheme.mutedDark,
                   letterSpacing: 0.8,
                 ),
               ),
@@ -590,12 +735,12 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFC3AA7F).withValues(alpha: 0.2),
+                    color: AdminTheme.goldAccent.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
                     'PINNED TOP $priorityRank',
-                    style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFF8A6D3B)),
+                    style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AdminTheme.priorityFg),
                   ),
                 ),
             ],
@@ -606,59 +751,64 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             children: [
               Text(
                 '#BS-${order.id}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF203F35)),
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AdminTheme.textDark),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: statusBg,
-                  borderRadius: BorderRadius.circular(100),
-                ),
-                child: Text(
-                  order.status,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: statusFg),
-                ),
-              ),
+              StatusChip(status: order.status),
             ],
           ),
-          // TEMP DISABLED (Bill Request feature on hold)
-          // if (order.billRequestedAt != null) ...[
-          //   const SizedBox(height: 10),
-          //   Container(
-          //     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          //     decoration: BoxDecoration(
-          //       color: const Color(0xFFF7E8CE),
-          //       borderRadius: BorderRadius.circular(10),
-          //       border: Border.all(color: const Color(0xFFC3AA7F)),
-          //     ),
-          //     child: Row(
-          //       children: [
-          //         const Icon(Icons.receipt_long, size: 16, color: Color(0xFF8A6D3B)),
-          //         const SizedBox(width: 8),
-          //         const Expanded(
-          //           child: Text(
-          //             'BILL REQUESTED • Awaiting bill settlement / payment',
-          //             style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8A6D3B)),
-          //           ),
-          //         ),
-          //         const SizedBox(width: 8),
-          //         Text(
-          //           '₱${order.totalAmount.toStringAsFixed(2)}',
-          //           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF203F35)),
-          //         ),
-          //       ],
-          //     ),
-          //   ),
-          // ],
+          if (order.hasPendingBillRequest) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF7E8CE),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AdminTheme.goldAccent),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.receipt_long, size: 16, color: AdminTheme.priorityFg),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'BILL REQUESTED • Awaiting bill settlement / payment',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AdminTheme.priorityFg),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '₱${order.totalAmount.toStringAsFixed(2)}',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AdminTheme.textDark),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: widget.onReopenBill == null
+                    ? null
+                    : () => widget.onReopenBill!(order.id),
+                icon: const Icon(Icons.lock_open, size: 14),
+                label: const Text('Reopen Ordering', style: TextStyle(fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AdminTheme.priorityFg,
+                  side: const BorderSide(color: AdminTheme.goldAccent),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 4),
           Text(
             'Table ${order.tableNumber.toString().padLeft(2, '0')} • Dine-in',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF24382F)),
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AdminTheme.textDark),
           ),
           const SizedBox(height: 8),
           Text(
             order.itemsDescription,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF4A5568)),
+            style: const TextStyle(fontSize: 13, color: AdminTheme.infoText),
           ),
           const SizedBox(height: 12),
           Row(
@@ -666,11 +816,11 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             children: [
               Text(
                 '${order.updatedAt} • Live sync',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF687368)),
+                style: const TextStyle(fontSize: 11, color: AdminTheme.mutedDark),
               ),
               Text(
                 '₱${order.totalAmount.toStringAsFixed(2)}',
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: Color(0xFF203F35)),
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AdminTheme.textDark),
               ),
             ],
           ),
@@ -679,7 +829,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           const SizedBox(height: 8),
           const Text(
             'Received, not accepted - Decline with a reason in review.',
-            style: TextStyle(fontSize: 11, color: Color(0xFF687368)),
+            style: TextStyle(fontSize: 11, color: AdminTheme.mutedDark),
           ),
         ],
       ),
@@ -693,9 +843,9 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           Expanded(
             child: OutlinedButton(
               style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF8E5136),
-                side: const BorderSide(color: Color(0xFFE5DFD3)),
-                backgroundColor: const Color(0xFFFFFDFA),
+                foregroundColor: AdminTheme.danger,
+                side: const BorderSide(color: AdminTheme.border),
+                backgroundColor: AdminTheme.surfaceIvory,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
@@ -707,7 +857,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           Expanded(
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF203F35),
+                backgroundColor: AdminTheme.textDark,
                 foregroundColor: Colors.white,
                 elevation: 0,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -729,7 +879,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
         width: double.infinity,
         child: ElevatedButton(
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF203F35),
+            backgroundColor: AdminTheme.textDark,
             foregroundColor: Colors.white,
             elevation: 0,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -750,7 +900,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           Expanded(
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF203F35),
+                backgroundColor: AdminTheme.textDark,
                 foregroundColor: Colors.white,
                 elevation: 0,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -764,10 +914,10 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           Expanded(
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFFFDFA),
-                foregroundColor: const Color(0xFF203F35),
+                backgroundColor: AdminTheme.surfaceIvory,
+                foregroundColor: AdminTheme.textDark,
                 elevation: 0,
-                side: const BorderSide(color: Color(0xFFE5DFD3)),
+                side: const BorderSide(color: AdminTheme.border),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),

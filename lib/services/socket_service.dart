@@ -1,11 +1,12 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../models/user_session.dart';
 import '../config/api_config.dart';
 
-class SocketService {
+class SocketService with WidgetsBindingObserver {
   late io.Socket _socket;
   bool _isConnected = false;
+  bool _joinAdminRooms = false;
 
   String get _baseUrl => ApiConfig.baseUrl;
 
@@ -48,7 +49,10 @@ class SocketService {
     Function(dynamic)? onSessionClosed,
     Function(dynamic)? onStockUpdated,
     Function(dynamic)? onBillRequested,
+    bool joinAdminRooms = false,
   }) {
+    _joinAdminRooms = joinAdminRooms;
+    WidgetsBinding.instance.addObserver(this);
     try {
       _socket = io.io(
         _socketUrl,
@@ -102,6 +106,7 @@ class SocketService {
         _socket.on('order_status_updated', (data) => onStatusUpdated(data));
         _socket.on('orderStatusUpdated', (data) => onStatusUpdated(data));
         _socket.on('order_paid', (data) => onStatusUpdated(data));
+        _socket.on('order_cancelled', (data) => onStatusUpdated(data));
       }
 
       // Dedicated handler para sa bill request events (hindi na ito dadaan sa
@@ -126,6 +131,21 @@ class SocketService {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      try {
+        if (!_isConnected) {
+          _socket.connect();
+        }
+      } catch (e) {
+        debugPrint('⚠️ [SocketService] Resume reconnect error: $e');
+      }
+      _rejoinRooms();
+    }
+  }
+
   void _rejoinRooms() {
     try {
       final int? tableId = UserSession.activeTableId ?? UserSession.activeTableNumber;
@@ -141,6 +161,12 @@ class SocketService {
       }
       if (UserSession.lastPlacedOrderId != null) {
         joinOrderRoom(UserSession.lastPlacedOrderId);
+      }
+      // Admin/kitchen monitoring rooms — kailangan ito para makarating pa rin
+      // ang targeted emits ng backend kahit naka-scope na sa table/session.
+      if (_joinAdminRooms) {
+        joinRoom('admin_live_monitoring');
+        joinRoom('kitchen_monitoring');
       }
     } catch (_) {}
   }
@@ -180,6 +206,11 @@ class SocketService {
 
   void disconnect() {
     try {
+      WidgetsBinding.instance.removeObserver(this);
+      if (_joinAdminRooms) {
+        leaveRoom('admin_live_monitoring');
+        leaveRoom('kitchen_monitoring');
+      }
       final int? tableId = UserSession.activeTableId ?? UserSession.activeTableNumber;
       if (tableId != null) {
         leaveRoom('table_$tableId');

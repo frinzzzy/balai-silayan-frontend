@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import 'dart:convert';
+import 'dart:ui' show ImageFilter;
 
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
-// TEMP DISABLED (Bill Request feature on hold)
-// import 'bill_requested_screen.dart';
+import 'services/global_socket_listener.dart';
+import 'services/order_context.dart';
+import 'services/order_event_bus.dart';
+import 'bill_requested_screen.dart';
 import 'user_session.dart';
 import 'config/api_config.dart';
 
@@ -24,11 +26,9 @@ class SessionBillScreen extends StatefulWidget {
 
 class _SessionBillScreenState extends State<SessionBillScreen> {
   bool _isLoading = true;
-  // TEMP DISABLED (Bill Request feature on hold)
-  // bool _isRequestingBill = false;
-  // bool _billRequestedSubmitted = false;
+  bool _isRequestingBill = false;
+  String? _billRequestedAt;
   String? _errorMessage;
-  late io.Socket _socket;
 
   double _foodDrinksTotal = 0.0;
   double _addOnsTotal = 0.0;
@@ -37,72 +37,50 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   String _orderStatus = 'PENDING';
   String _sessionStatus = 'ACTIVE';
 
+  int? _refreshToken;
+  int? _contextToken;
+
   String get _baseUrl => ApiConfig.baseUrl;
 
   @override
   void initState() {
     super.initState();
     _fetchSessionBillData();
-    _connectOrderUpdates();
-  }
-
-  void _connectOrderUpdates() {
-    _socket = io.io(
-      _baseUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket', 'polling'])
-          .disableAutoConnect()
-          .build(),
+    _contextToken = OrderContext.instance.enter(
+      mode: CustomerOrderMode.browsingTickets,
     );
-    _socket.onConnect((_) {
-      final int? sessionId =
-          UserSession.activeSessionId ??
-              int.tryParse(UserSession.sessionId ?? '');
-      if (sessionId != null) _socket.emit('join_room', 'session_$sessionId');
+    _refreshToken = OrderEventBus.instance.subscribeRefresh(() {
+      if (mounted) _fetchSessionBillData(refresh: true);
     });
-    _socket.on('order_updated', (event) {
-      if (!mounted || event is! Map) return;
+    GlobalSocketListener.instance.start(context: context);
+    GlobalSocketListener.instance.registerTableIdentity(
+      tableId: widget.tableId,
+      tableNumber: widget.tableId,
+    );
+    GlobalSocketListener.instance.setOnSessionClosed((data) {
+      if (!mounted || data is! Map) return;
       final int? eventSessionId = int.tryParse(
-        (event['session_id'] ?? '').toString(),
+        (data['session_id'] ?? '').toString(),
       );
       final int? activeSessionId =
-          UserSession.activeSessionId ??
-              int.tryParse(UserSession.sessionId ?? '');
-      if (eventSessionId == activeSessionId) {
-        _fetchSessionBillData(refresh: true);
-      }
-    });
-    _socket.on('additional_items_added', (event) {
-      if (!mounted || event is! Map) return;
-      final int? eventSessionId = int.tryParse(
-        (event['session_id'] ?? '').toString(),
-      );
-      final int? activeSessionId =
-          UserSession.activeSessionId ??
-              int.tryParse(UserSession.sessionId ?? '');
-      if (eventSessionId == activeSessionId || eventSessionId == null) {
-        _fetchSessionBillData(refresh: true);
-      }
-    });
-    _socket.on('table_session_closed', (event) {
-      if (!mounted || event is! Map) return;
-      final int? eventSessionId = int.tryParse(
-        (event['session_id'] ?? '').toString(),
-      );
-      final int? activeSessionId =
-          UserSession.activeSessionId ??
-              int.tryParse(UserSession.sessionId ?? '');
+          UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
       if (eventSessionId == activeSessionId && mounted) {
         setState(() => _sessionStatus = 'CLOSED');
       }
     });
-    _socket.connect();
   }
 
   @override
   void dispose() {
-    _socket.disconnect();
-    _socket.dispose();
+    if (_refreshToken != null) {
+      OrderEventBus.instance.unsubscribe(_refreshToken!);
+      _refreshToken = null;
+    }
+    if (_contextToken != null) {
+      OrderContext.instance.leave(_contextToken!);
+      _contextToken = null;
+    }
+    GlobalSocketListener.instance.setOnSessionClosed(GlobalSocketListener.instance.defaultOrderSessionClosed);
     super.dispose();
   }
 
@@ -122,19 +100,19 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     double computedAddOnsTotal = 0.0;
 
     for (var order in _sessionOrders) {
-      if (order['isSelected'] == true) {
-        double orderTotal = _parseDouble(order['order_total']);
-        computedGrandTotal += orderTotal;
+      // Ang total ay para sa buong session. Ang checkbox ay para lang sa
+      // kung aling ticket ang ire-request ng bill, hindi para sa total.
+      double orderTotal = _parseDouble(order['order_total']);
+      computedGrandTotal += orderTotal;
 
-        final List items = order['items'] ?? [];
-        for (var item in items) {
-          double unitPrice = _parseDouble(item['unit_price']);
-          int qty = item['quantity'] ?? 1;
-          double addonTotal = _parseDouble(item['addon_total']);
+      final List items = order['items'] ?? [];
+      for (var item in items) {
+        double unitPrice = _parseDouble(item['unit_price']);
+        int qty = item['quantity'] ?? 1;
+        double addonTotal = _parseDouble(item['addon_total']);
 
-          computedFoodTotal += (unitPrice * qty);
-          computedAddOnsTotal += (addonTotal * qty);
-        }
+        computedFoodTotal += (unitPrice * qty);
+        computedAddOnsTotal += (addonTotal * qty);
       }
     }
 
@@ -228,7 +206,11 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                 ? '#${rawOrderCode.substring(0, 8).toUpperCase()}'
                 : '#ORD-$rawOrderCode';
 
+            final dynamic orderBillRequestedAt = o['bill_requested_at'];
+            final bool isTicketRequested = orderBillRequestedAt != null;
+
             parsedOrders.add({
+              "order_id": orderId,
               "order_code": formattedCode,
               "status": o['order_status'] ?? o['status'] ?? "PENDING",
               "time": o['created_at'] != null
@@ -239,8 +221,18 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                   : "01:53",
               "items": parsedItems,
               "order_total": finalOrderTotal,
-              "isSelected": true, // Naka-select by default ang bawat ticket
+              "isRequested": isTicketRequested,
+              "bill_requested_at": orderBillRequestedAt?.toString(),
+              // Naka-check by default ang mga hindi pa nag-request para madaling
+              // pumili. Naka-lock at naka-blur naman ang mga requested na.
+              "isSelected": !isTicketRequested,
             });
+
+            if (isTicketRequested) {
+              UserSession.setTicketBillRequested(orderId, orderBillRequestedAt);
+            } else {
+              UserSession.clearTicketBillRequested(orderId);
+            }
           }
 
           setState(() {
@@ -251,6 +243,14 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             _orderStatus = parsedOrders.isEmpty
                 ? 'PENDING'
                 : parsedOrders.first['status'].toString().toUpperCase();
+            final dynamic requestedAt =
+                data['bill_requested_at'] ?? data['requested_at'];
+            // Session-level marker lang ito. Per-ticket state ang
+            // isRequested/bill_requested_at sa bawat order.
+            final bool allTicketsRequested = parsedOrders.isNotEmpty &&
+                parsedOrders.every((order) => order['isRequested'] == true);
+            _billRequestedAt =
+                allTicketsRequested ? requestedAt?.toString() : null;
             _isLoading = false;
           });
 
@@ -274,37 +274,317 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     }
   }
 
-  // TEMP DISABLED (Bill Request feature on hold)
-  // Future<void> _submitRequestBill() async {
-  //   setState(() => _isRequestingBill = true);
-  //   final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: const Color(0xFFEF4444),
+      ),
+    );
+  }
 
-  //   try {
-  //     await http.get(
-  //       Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill'),
-  //       headers: {'Content-Type': 'application/json'},
-  //     );
-  //   } catch (_) {}
+  Future<Map<String, dynamic>> _postTicketBillRequest({
+    required dynamic orderId,
+    required int tableNum,
+    required int? sessionId,
+    required String? token,
+    required Map<String, String> jsonHeaders,
+  }) async {
+    final List<Uri> uris = <Uri>[
+      if (sessionId != null && sessionId > 0 && token != null && token.isNotEmpty)
+        Uri.parse(
+            '$_baseUrl/api/v1/customer/sessions/$sessionId/orders/$orderId/bill'),
+      Uri.parse('$_baseUrl/api/v1/tables/$tableNum/orders/$orderId/bill'),
+    ];
 
-  //   if (mounted) {
-  //     setState(() {
-  //       _isRequestingBill = false;
-  //       _billRequestedSubmitted = true;
-  //     });
-  //     Navigator.pushReplacement(
-  //       context,
-  //       MaterialPageRoute(
-  //         builder: (context) => BillRequestedScreen(
-  //           tableId: tableNum,
-  //           isTakeout: widget.isTakeout,
-  //           totalAmount: _grandTotal,
-  //           foodDrinksTotal: _foodDrinksTotal,
-  //           addOnsTotal: _addOnsTotal,
-  //         ),
-  //       ),
-  //     );
-  //   }
-  // }
+    bool unsupported = false;
+    String message = 'Could not request the bill. Please try again.';
+
+    for (final Uri uri in uris) {
+      try {
+        final bool isTableRoute = uri.path.startsWith('/api/v1/tables/');
+        final Map<String, String> requestHeaders = isTableRoute
+            ? const <String, String>{'Content-Type': 'application/json'}
+            : jsonHeaders;
+        final http.Response response = await http
+            .post(uri, headers: requestHeaders, body: jsonEncode(<String, dynamic>{}))
+            .timeout(const Duration(seconds: 15));
+
+        Map<String, dynamic>? data;
+        try {
+          final dynamic decoded =
+              response.body.isEmpty ? null : jsonDecode(response.body);
+          if (decoded is Map) {
+            final dynamic rawData = decoded['data'] ?? decoded;
+            if (rawData is Map) {
+              data = Map<String, dynamic>.from(rawData);
+            }
+          }
+        } catch (_) {}
+
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          final String requestedAt = (data?['bill_requested_at'] ??
+                  data?['requested_at'] ??
+                  DateTime.now().toIso8601String())
+              .toString();
+          return <String, dynamic>{
+            'ok': true,
+            'requestedAt': requestedAt,
+          };
+        }
+
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          continue;
+        }
+
+        if (response.statusCode == 404 ||
+            response.statusCode == 405 ||
+            response.statusCode == 501 ||
+            response.statusCode == 503) {
+          // Lumang backend na wala pa ang per-ticket route.
+          unsupported = true;
+          continue;
+        }
+
+        return <String, dynamic>{
+          'ok': false,
+          'message': (data?['message'] ?? message).toString(),
+          'status': response.statusCode,
+        };
+      } catch (_) {
+        continue;
+      }
+    }
+
+    return <String, dynamic>{
+      'ok': false,
+      'unsupported': unsupported,
+      'message': message,
+    };
+  }
+
+  Future<Map<String, dynamic>> _postLegacySessionBill({
+    required int tableNum,
+    required int? sessionId,
+    required String? token,
+    required Map<String, String> jsonHeaders,
+  }) async {
+    final List<Uri> uris = <Uri>[
+      if (sessionId != null && sessionId > 0 && token != null && token.isNotEmpty)
+        Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
+      Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill'),
+    ];
+
+    String message = 'Could not request the bill. Please try again.';
+
+    for (final Uri uri in uris) {
+      try {
+        final bool isTableRoute = uri.path.startsWith('/api/v1/tables/');
+        final Map<String, String> requestHeaders = isTableRoute
+            ? const <String, String>{'Content-Type': 'application/json'}
+            : jsonHeaders;
+        final http.Response response = await http
+            .post(uri, headers: requestHeaders, body: jsonEncode(<String, dynamic>{}))
+            .timeout(const Duration(seconds: 15));
+
+        Map<String, dynamic>? data;
+        try {
+          final dynamic decoded =
+              response.body.isEmpty ? null : jsonDecode(response.body);
+          if (decoded is Map) {
+            final dynamic rawData = decoded['data'] ?? decoded;
+            if (rawData is Map) {
+              data = Map<String, dynamic>.from(rawData);
+            }
+          }
+        } catch (_) {}
+
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          return <String, dynamic>{
+            'ok': true,
+            'requestedAt': (data?['bill_requested_at'] ??
+                    data?['requested_at'] ??
+                    DateTime.now().toIso8601String())
+                .toString(),
+          };
+        }
+
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          continue;
+        }
+
+        message = (data?['message'] ?? message).toString();
+      } catch (_) {
+        continue;
+      }
+    }
+
+    return <String, dynamic>{'ok': false, 'message': message};
+  }
+
+  Future<void> _submitRequestBill() async {
+    if (_isRequestingBill) return;
+
+    final int tableNum =
+        widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 1;
+    final int? sessionId =
+        UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
+    final String? token = UserSession.activeSessionToken;
+
+    final List<Map<String, dynamic>> selectedTickets = _sessionOrders
+        .where((order) =>
+            order['isSelected'] == true && order['isRequested'] != true)
+        .toList();
+
+    if (selectedTickets.isEmpty) {
+      _showSnack('Select at least one ticket to request a bill.');
+      return;
+    }
+
+    final bool hasUnserved = selectedTickets.any((order) {
+      final String status =
+          (order['status'] ?? 'PENDING').toString().toUpperCase();
+      return status == 'PENDING' ||
+          status == 'NEW' ||
+          status == 'PREPARING' ||
+          status == 'READY';
+    });
+
+    if (hasUnserved) {
+      final bool? proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFFFFFDFA),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: const Text(
+            'Request bill now?',
+            style: TextStyle(
+                fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+          ),
+          content: const Text(
+            'May mga order pang hindi served. Sigurado ka bang i-request na ang bill para sa mga napiling ticket?',
+            style: TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Not yet'),
+            ),
+            ElevatedButton(
+              style:
+                  ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Request Bill',
+                  style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true) return;
+    }
+
+    setState(() => _isRequestingBill = true);
+
+    final Map<String, String> jsonHeaders = <String, String>{
+      'Content-Type': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+
+    int successCount = 0;
+    bool perTicketUnsupported = false;
+    String lastRequestedAt = DateTime.now().toIso8601String();
+    String? firstError;
+
+    for (final Map<String, dynamic> ticket in selectedTickets) {
+      final dynamic orderId = ticket['order_id'];
+      final Map<String, dynamic> result = await _postTicketBillRequest(
+        orderId: orderId,
+        tableNum: tableNum,
+        sessionId: sessionId,
+        token: token,
+        jsonHeaders: jsonHeaders,
+      );
+
+      if (result['ok'] == true) {
+        successCount++;
+        lastRequestedAt = (result['requestedAt'] ?? lastRequestedAt).toString();
+        UserSession.setTicketBillRequested(orderId, lastRequestedAt);
+      } else if (result['unsupported'] == true) {
+        perTicketUnsupported = true;
+        break;
+      } else {
+        firstError ??= (result['message'] ?? '').toString();
+      }
+    }
+
+    // Backward compatible fallback: kung wala pa ang per-ticket route sa
+    // naka-deploy na backend, isang session-level request na lang ang gagawin.
+    if (perTicketUnsupported && successCount == 0) {
+      final Map<String, dynamic> legacy = await _postLegacySessionBill(
+        tableNum: tableNum,
+        sessionId: sessionId,
+        token: token,
+        jsonHeaders: jsonHeaders,
+      );
+
+      if (legacy['ok'] == true) {
+        lastRequestedAt =
+            (legacy['requestedAt'] ?? lastRequestedAt).toString();
+        for (final Map<String, dynamic> ticket in selectedTickets) {
+          UserSession.setTicketBillRequested(
+              ticket['order_id'], lastRequestedAt);
+          successCount++;
+        }
+      } else {
+        firstError ??= (legacy['message'] ?? firstError ?? '').toString();
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _isRequestingBill = false;
+        for (int i = 0; i < _sessionOrders.length; i++) {
+          final dynamic orderId = _sessionOrders[i]['order_id'];
+          if (UserSession.isTicketBillRequested(orderId)) {
+            _sessionOrders[i]['isRequested'] = true;
+            _sessionOrders[i]['isSelected'] = false;
+            _sessionOrders[i]['bill_requested_at'] =
+                UserSession.billRequestedAtFor(orderId);
+          }
+        }
+        final bool allRequested = _sessionOrders.isNotEmpty &&
+            _sessionOrders.every((order) => order['isRequested'] == true);
+        if (allRequested) {
+          _billRequestedAt = lastRequestedAt;
+        }
+      });
+      _recalculateTotals();
+    }
+
+    if (successCount > 0) {
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => BillRequestedScreen(
+            tableId: tableNum,
+            isTakeout: widget.isTakeout,
+            totalAmount: _grandTotal,
+            foodDrinksTotal: _foodDrinksTotal,
+            addOnsTotal: _addOnsTotal,
+            billRequestedAt: lastRequestedAt,
+          ),
+        ),
+      );
+      return;
+    }
+
+    _showSnack(firstError != null && firstError.isNotEmpty
+        ? firstError
+        : 'Could not request the bill. Please try again.');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -312,6 +592,8 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     final String tableString = widget.isTakeout
         ? 'Takeout'
         : 'Table ${tableNum.toString().padLeft(2, '0')}';
+    final bool hasSelectedOrders = _sessionOrders.any(
+        (order) => order['isSelected'] == true && order['isRequested'] != true);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F4EC),
@@ -360,8 +642,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                     const SizedBox(height: 16),
                     _buildWalletContextNote(),
                     const SizedBox(height: 24),
-                    // TEMP DISABLED (Bill Request feature on hold)
-                    // _buildPrimaryActionButton(hasSelectedOrders),
+                    _buildPrimaryActionButton(hasSelectedOrders),
                     const SizedBox(height: 16),
                   ],
                 ),
@@ -527,7 +808,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         ),
         SizedBox(height: 8),
         Text(
-          'Piliin ang mga ticket o order na gustong hingian ng bill at bayaran nang hiwalay.',
+          'I-review ang mga order sa session na ito, pagkatapos ay i-request ang bill para ma-notify ang staff.',
           style: TextStyle(fontSize: 13, color: Color(0xFF788078), height: 1.4),
         ),
       ],
@@ -537,10 +818,15 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   Widget _buildSessionStatusBadge() {
     final bool isPaid = _orderStatus == 'COMPLETED';
     final bool isClosed = _sessionStatus == 'CLOSED';
+    final bool billRequested = _billRequestedAt != null &&
+        _sessionOrders.isNotEmpty &&
+        _sessionOrders.every((order) => order['isRequested'] == true);
     final String statusText = isPaid
         ? 'Paid • Session Closed'
         : isClosed
         ? 'Session Closed'
+        : billRequested
+        ? 'Bill Requested'
         : 'Active Session';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -586,15 +872,20 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     final String time = order['time'] ?? '01:53';
     final List items = order['items'] ?? [];
     final bool isSelected = order['isSelected'] ?? true;
+    final bool isRequested = order['isRequested'] == true;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFDFA),
+        color: isRequested ? const Color(0xFFF4F6F2) : const Color(0xFFFFFDFA),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: isSelected ? const Color(0xFFA47C3D) : const Color(0xFFE5DFD3),
-          width: isSelected ? 1.5 : 1,
+          color: isRequested
+              ? const Color(0xFF53766C)
+              : isSelected
+                  ? const Color(0xFFA47C3D)
+                  : const Color(0xFFE5DFD3),
+          width: (isSelected || isRequested) ? 1.5 : 1,
         ),
         boxShadow: [
           BoxShadow(
@@ -605,16 +896,20 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         ],
       ),
       child: CheckboxListTile(
-        value: isSelected,
-        activeColor: const Color(0xFF203F35),
+        value: isRequested ? true : isSelected,
+        activeColor: isRequested
+            ? const Color(0xFF53766C)
+            : const Color(0xFF203F35),
         checkboxShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        onChanged: (bool? value) {
-          setState(() {
-            _sessionOrders[index]['isSelected'] = value ?? true;
-          });
-          _recalculateTotals();
-        },
+        onChanged: isRequested
+            ? null
+            : (bool? value) {
+                setState(() {
+                  _sessionOrders[index]['isSelected'] = value ?? true;
+                });
+                _recalculateTotals();
+              },
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -670,11 +965,36 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
               time,
               style: const TextStyle(fontSize: 11, color: Color(0xFF788078)),
             ),
+            if (isRequested)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(
+                  children: const [
+                    Icon(Icons.check_circle,
+                        size: 14, color: Color(0xFF53766C)),
+                    SizedBox(width: 4),
+                    Text(
+                      'Bill requested',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF53766C),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12.0),
               child: Divider(height: 1, color: Color(0xFFE5DFD3)),
             ),
-            ...items.map((item) {
+            ImageFiltered(
+              imageFilter: isRequested
+                  ? ImageFilter.blur(sigmaX: 2.2, sigmaY: 2.2)
+                  : ImageFilter.blur(sigmaX: 0, sigmaY: 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: items.map((item) {
               final int quantity =
                   int.tryParse(item['quantity']?.toString() ?? '') ?? 1;
               final double unitPrice = _parseDouble(
@@ -738,7 +1058,9 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                   ],
                 ),
               );
-            }),
+                }).toList(),
+              ),
+            ),
           ],
         ),
       ),
@@ -850,7 +1172,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Piliin ang mga ticket sa itaas para sa hiwalay na pagbabayad.',
+              'Kapag naipadala na ang bill request, maaari mong sundan ang status sa Live Status o hintayin ang staff.',
               style: const TextStyle(
                 fontSize: 12,
                 color: Color(0xFF53766C),
@@ -863,65 +1185,70 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     );
   }
 
-  // TEMP DISABLED (Bill Request feature on hold)
-  // Widget _buildPrimaryActionButton(bool hasSelectedOrders) {
-  //   return SizedBox(
-  //     width: double.infinity,
-  //     height: 52,
-  //     child: ElevatedButton(
-  //       style: ElevatedButton.styleFrom(
-  //         backgroundColor: (!hasSelectedOrders ||
-  //             _isRequestingBill ||
-  //             _billRequestedSubmitted ||
-  //             _sessionStatus == 'CLOSED' ||
-  //             _orderStatus == 'COMPLETED')
-  //             ? const Color(0xFF788078)
-  //             : const Color(0xFF203F35),
-  //         shape: RoundedRectangleBorder(
-  //           borderRadius: BorderRadius.circular(10),
-  //         ),
-  //         elevation: 0,
-  //       ),
-  //       onPressed: (!hasSelectedOrders ||
-  //           _isRequestingBill ||
-  //           _billRequestedSubmitted ||
-  //           _sessionStatus == 'CLOSED' ||
-  //           _orderStatus == 'COMPLETED')
-  //           ? null
-  //           : _submitRequestBill,
-  //       child: _isRequestingBill
-  //           ? const CircularProgressIndicator(color: Colors.white)
-  //           : Row(
-  //         mainAxisAlignment: MainAxisAlignment.center,
-  //         children: [
-  //           Text(
-  //             _orderStatus == 'COMPLETED'
-  //                 ? 'Paid ✓'
-  //                 : _sessionStatus == 'CLOSED'
-  //                 ? 'Session Closed'
-  //                 : _billRequestedSubmitted
-  //                 ? 'Bill Requested ✓'
-  //                 : 'Request Bill for Selected',
-  //             style: const TextStyle(
-  //               color: Colors.white,
-  //               fontWeight: FontWeight.bold,
-  //               fontSize: 14,
-  //             ),
-  //           ),
-  //           const SizedBox(width: 8),
-  //           Icon(
-  //             _billRequestedSubmitted ||
-  //                 _sessionStatus == 'CLOSED' ||
-  //                 _orderStatus == 'COMPLETED'
-  //                 ? Icons.check_circle
-  //                 : Icons.receipt_long,
-  //             color: Colors.white,
-  //             size: 18,
-  //           ),
-  //         ],
-  //       ),
-  //     );
-  //   }
+  Widget _buildPrimaryActionButton(bool hasSelectedOrders) {
+    final int selectedCount = _sessionOrders
+        .where((order) =>
+            order['isSelected'] == true && order['isRequested'] != true)
+        .length;
+    final bool allRequested = _sessionOrders.isNotEmpty &&
+        _sessionOrders.every((order) => order['isRequested'] == true);
+    final bool isClosed = _sessionStatus == 'CLOSED';
+    final bool isPaid = _orderStatus == 'COMPLETED' || _orderStatus == 'PAID';
+    final bool isDisabled = !hasSelectedOrders ||
+        _isRequestingBill ||
+        isClosed ||
+        isPaid ||
+        _sessionOrders.isEmpty;
+
+    final String label = isPaid
+        ? 'Paid ✓'
+        : isClosed
+            ? 'Session Closed'
+            : allRequested
+                ? 'Bill Requested ✓'
+                : selectedCount > 0
+                    ? 'Request Bill ($selectedCount selected)'
+                    : 'Select a ticket to request';
+
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor:
+              isDisabled ? const Color(0xFF788078) : const Color(0xFF203F35),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          elevation: 0,
+        ),
+        onPressed: isDisabled ? null : _submitRequestBill,
+        child: _isRequestingBill
+            ? const CircularProgressIndicator(color: Colors.white)
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(
+                    allRequested || isClosed || isPaid
+                        ? Icons.check_circle
+                        : Icons.receipt_long,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
 
   Widget _buildCustomerBottomNav(int tableNum) {
     return Container(
@@ -939,7 +1266,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             onTap: () {
               Navigator.pushReplacement(
                 context,
-                MaterialPageRoute(builder: (context) => const MenuScreen()),
+                MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')),
               );
             },
           ),
@@ -951,7 +1278,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                 context,
                 MaterialPageRoute(
                   builder: (context) => OrderStatusScreen(
-                    orderId: UserSession.lastPlacedOrderId ?? 1042,
+                    orderId: UserSession.activeOrderId,
                     isTakeout: widget.isTakeout,
                     tableId: tableNum,
                     isAdditionalOrder: UserSession.isAdditionalOrder,

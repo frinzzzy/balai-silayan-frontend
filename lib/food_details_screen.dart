@@ -143,7 +143,7 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
     try {
       final response = await http.get(
         Uri.parse('$_baseUrl/api/v1/menu/${widget.foodItem.itemDbId}/add-ons'),
-      );
+      ).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final decodedData = jsonDecode(response.body);
         final List list = decodedData['data'] ?? [];

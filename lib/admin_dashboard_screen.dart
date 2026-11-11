@@ -5,8 +5,11 @@ import 'screens/admin/screens/order_queue_screen.dart';
 import 'screens/admin/screens/sales_analytics_screen.dart';
 import 'screens/admin/screens/stock_management_screen.dart';
 import 'services/socket_service.dart';
+import 'services/audio_notification_service.dart';
 import 'models/user_session.dart';
 import 'theme/app_theme.dart';
+import 'theme/admin_tokens.dart';
+import 'widgets/skeleton.dart';
 import 'config/api_config.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -61,10 +64,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   void _initSocketSync() {
     _socketService.connect(
+      joinAdminRooms: true,
       onOrderUpdated: (_) => _loadDashboardData(silent: true),
       onStatusUpdated: (_) => _loadDashboardData(silent: true),
       onSessionClosed: (_) => _loadDashboardData(silent: true),
-      onBillRequested: (_) => _loadDashboardData(silent: true),
+      onBillRequested: (payload) => _handleBillRequestedEvent(payload),
       onStockUpdated: (_) {
         _loadDashboardData(silent: true);
         _stockScreenKey.currentState?.loadInventorySilently();
@@ -85,7 +89,83 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         _salesStats = stats;
         _isLoading = false;
       });
+      _notifyPendingBillRequests(orders);
     }
+  }
+
+  /// I-scan ang buong order queue at mag-notify para sa bawat session na may
+  /// pending bill request. Dedupe ang service, kaya safe itong tawagin sa
+  /// bawat refresh/back/tab switch.
+  void _notifyPendingBillRequests(Iterable<AdminOrder> orders) {
+    for (final AdminOrder order in orders) {
+      if (!order.hasPendingBillRequest) continue;
+      AudioNotificationService.showAdminBillRequestedBanner(
+        tableNumber: order.tableNumber,
+        sessionId: order.sessionId,
+        orderId: order.id,
+        billRequestedAt: order.billRequestedAt,
+        grandTotal: order.totalAmount.toStringAsFixed(2),
+      );
+    }
+  }
+
+  /// Socket `bill_requested` handler: mag-notify agad mula sa payload bago
+  /// i-refresh ang queue, para hindi maantala ang admin alert.
+  void _handleBillRequestedEvent(dynamic payload) {
+    if (payload is Map) {
+      final Map<String, dynamic> data = Map<String, dynamic>.from(payload);
+      final int? rawTableNumber = int.tryParse(
+        (data['table_number'] ?? '').toString(),
+      );
+      final int? rawTableId = int.tryParse(
+        (data['table_id'] ?? '').toString(),
+      );
+      final int? sessionId = int.tryParse(
+        (data['session_id'] ?? '').toString(),
+      );
+
+      // Fallback sa table number mula sa kasalukuyang queue kung table_id lang
+      // ang nasa socket payload.
+      int? tableNumber = rawTableNumber;
+      if (tableNumber == null) {
+        for (final AdminOrder order in _orders) {
+          final bool matchesSession =
+              sessionId != null && order.sessionId == sessionId;
+          final bool matchesTable =
+              rawTableId != null && order.tableNumber == rawTableId;
+          if (matchesSession || matchesTable) {
+            tableNumber = order.tableNumber;
+            break;
+          }
+        }
+        tableNumber ??= rawTableId;
+      }
+
+      final dynamic rawRequestedAt =
+          data['bill_requested_at'] ?? data['requested_at'];
+      final DateTime? requestedAt = rawRequestedAt != null
+          ? DateTime.tryParse(rawRequestedAt.toString())
+          : null;
+      final dynamic rawTotal =
+          data['grand_total'] ?? data['total_amount'] ?? data['amount'];
+      final double? total =
+          rawTotal != null ? double.tryParse(rawTotal.toString()) : null;
+
+      if (tableNumber != null && tableNumber > 0) {
+        final int? orderId = int.tryParse(
+          (data['order_id'] ?? data['ticket_order_id'] ?? '').toString(),
+        );
+        AudioNotificationService.showAdminBillRequestedBanner(
+          tableNumber: tableNumber,
+          sessionId: sessionId,
+          orderId: orderId,
+          billRequestedAt: requestedAt,
+          grandTotal: total != null ? total.toStringAsFixed(2) : null,
+        );
+      }
+    }
+
+    _loadDashboardData(silent: true);
   }
 
   Future<void> _handleLogin() async {
@@ -116,6 +196,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         final token = resData['token'] ?? resData['data']?['token'] ?? resData['access_token'];
         UserSession.authToken = token;
         AdminService.staffAuthToken = token;
+        AdminService.staffName = username;
 
         setState(() {
           _isLoggedIn = true;
@@ -124,7 +205,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         _initSocketSync();
 
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Login Successful! Welcome to Admin Portal.'), backgroundColor: Color(0xFF203F35)),
+          const SnackBar(content: Text('Login Successful! Welcome to Admin Portal.'), backgroundColor: AdminTheme.textDark),
         );
         return;
       } else {
@@ -148,14 +229,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFFFFFDFA),
+        backgroundColor: AdminTheme.surfaceIvory,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Confirm Logout', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+        title: const Text('Confirm Logout', style: TextStyle(fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
         content: const Text('Are you sure you want to log out from the admin portal?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: Color(0xFF788078))),
+            child: const Text('Cancel', style: TextStyle(color: AdminTheme.mutedGray)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
@@ -176,6 +257,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _handleReopenBill(int orderId) async {
+    final bool ok = await _adminService.reopenOrderBill(
+      orderId: orderId,
+      isApiConnected: _isApiConnected,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(ok
+            ? 'Ordering reopened for order #$orderId.'
+            : 'Could not reopen ordering. Please try again.'),
+        backgroundColor:
+            ok ? const Color(0xFF203F35) : const Color(0xFF8E5136),
+      ),
+    );
+    if (ok) _loadDashboardData(silent: true);
   }
 
   void _handleActionTriggered(int orderId, String targetStatus, {String? paymentMethod, String? declineReason}) {
@@ -221,30 +320,66 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         final bool isDesktop = constraints.maxWidth >= 900;
 
         return Scaffold(
-          backgroundColor: const Color(0xFFF8F4EC),
+          backgroundColor: AdminTheme.background,
           appBar: AppBar(
-            backgroundColor: const Color(0xFF19382F),
+            backgroundColor: AdminTheme.deepGreen,
             elevation: 0,
-            title: const Row(
+            title: Row(
               children: [
-                Icon(Icons.home_outlined, color: Color(0xFFC3AA7F), size: 18),
-                SizedBox(width: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.asset(
+                    'lib/logo/BalaiSilayanLogo_512.png',
+                    width: 30,
+                    height: 30,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    'BALAI SILAYAN · ADMIN PORTAL',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontFamily: 'Libre Baskerville',
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                      letterSpacing: 1.0,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'BALAI SILAYAN · ADMIN PORTAL',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: 'Libre Baskerville',
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                          letterSpacing: 1.0,
+                        ),
+                      ),
+                      Text(
+                        _currentTabIndex == 0
+                            ? 'ORDER QUEUE'
+                            : _currentTabIndex == 1
+                                ? 'SALES ANALYTICS'
+                                : 'STOCK MANAGEMENT',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.8,
+                          color: AdminTheme.goldAccent,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
             actions: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(
+                  Icons.circle,
+                  size: 10,
+                  color: _isApiConnected ? AdminTheme.successFg : AdminTheme.danger,
+                ),
+              ),
               IconButton(
                 icon: const Icon(Icons.logout, color: Colors.white),
                 tooltip: 'Logout',
@@ -258,14 +393,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               if (isDesktop) _buildSidebarNav(),
               Expanded(
                 child: _isLoading
-                    ? const Center(child: CircularProgressIndicator(color: Color(0xFF203F35)))
+                    ? _buildLoadingSkeleton()
                     : IndexedStack(
                   index: _currentTabIndex,
                   children: [
                     OrderQueueScreen(
                       orders: _orders,
                       onActionTriggered: _handleActionTriggered,
+                      onReopenBill: _handleReopenBill,
                       onRefresh: _loadDashboardData,
+                      stats: _salesStats,
                     ),
                     SalesAnalyticsScreen(
                       stats: _salesStats,
@@ -283,29 +420,60 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
           bottomNavigationBar: isDesktop
               ? null
-              : BottomNavigationBar(
-            currentIndex: _currentTabIndex,
-            onTap: (idx) => setState(() => _currentTabIndex = idx),
-            backgroundColor: const Color(0xFF19382F),
-            selectedItemColor: const Color(0xFFC3AA7F),
-            unselectedItemColor: Colors.white60,
-            items: const [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.receipt_long_outlined),
-                label: 'Order Queue',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.analytics_outlined),
-                label: 'Sales Analytics',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.inventory_2_outlined),
-                label: 'Stock Mgmt',
-              ),
+              : NavigationBar(
+            backgroundColor: AdminTheme.deepGreen,
+            indicatorColor: AdminTheme.goldAccent,
+            selectedIndex: _currentTabIndex,
+            onDestinationSelected: (idx) => setState(() => _currentTabIndex = idx),
+            destinations: [
+              NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Order Queue'),
+              NavigationDestination(icon: Icon(Icons.analytics_outlined), label: 'Sales Analytics'),
+              NavigationDestination(icon: Icon(Icons.inventory_2_outlined), label: 'Stock Mgmt'),
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildLoadingSkeleton() {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: List.generate(3, (index) => _buildSkeletonCard()),
+    );
+  }
+
+  Widget _buildSkeletonCard() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AdminTheme.surfaceIvory,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AdminTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(child: Skeleton(width: 140, height: 14, radius: 7)),
+              SizedBox(width: 60, child: Skeleton(width: 70, height: 24, radius: 12)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(child: Skeleton(width: 180, height: 18, radius: 9)),
+              SizedBox(width: 60, child: Skeleton(width: 60, height: 18, radius: 9)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Skeleton(width: double.infinity, height: 12, radius: 6),
+        ],
+      ),
     );
   }
 
@@ -317,39 +485,77 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     ];
 
     return Container(
-      width: 230,
-      color: const Color(0xFF19382F),
+      width: 264,
+      color: AdminTheme.deepGreen,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 20),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Text(
-              'MANAGEMENT',
-              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white.withValues(alpha: 0.5), letterSpacing: 1.2),
+            padding: const EdgeInsets.fromLTRB(22, 26, 22, 20),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.asset(
+                    'lib/logo/BalaiSilayanLogo_512.png',
+                    width: 40,
+                    height: 40,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Balai Silayan',
+                        style: TextStyle(
+                          fontFamily: 'Libre Baskerville',
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        'ADMIN PORTAL',
+                        style: TextStyle(
+                          fontSize: 9.5,
+                          letterSpacing: 1.6,
+                          fontWeight: FontWeight.w800,
+                          color: AdminTheme.goldAccent,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFF244B3E)),
+          const SizedBox(height: 10),
           ...navItems.map((item) {
             final idx = item['index'] as int;
             final isSelected = _currentTabIndex == idx;
             return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: InkWell(
                 onTap: () => setState(() => _currentTabIndex = idx),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(12),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   decoration: BoxDecoration(
-                    color: isSelected ? const Color(0xFF2C4D40) : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
+                    color: isSelected ? AdminTheme.deepGreenSelected : Colors.transparent,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isSelected ? AdminTokens.gold.withValues(alpha: 0.35) : Colors.transparent,
+                    ),
                   ),
                   child: Row(
                     children: [
                       Icon(
                         item['icon'] as IconData,
-                        color: isSelected ? const Color(0xFFC3AA7F) : Colors.white70,
+                        color: isSelected ? AdminTheme.goldAccent : Colors.white70,
                         size: 18,
                       ),
                       const SizedBox(width: 12),
@@ -370,11 +576,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           const Spacer(),
           Padding(
             padding: const EdgeInsets.all(20.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                const Text('Admin Staff', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13)),
-                Text('Restaurant Management', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 11)),
+                const CircleAvatar(
+                  radius: 17,
+                  backgroundColor: AdminTheme.deepGreenSelected,
+                  child: Text(
+                    'A',
+                    style: TextStyle(color: AdminTheme.goldAccent, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Admin Staff', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13)),
+                      Text('Restaurant Management', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 11)),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: _handleLogout,
+                  icon: const Icon(Icons.logout_rounded, size: 18, color: Colors.white60),
+                ),
               ],
             ),
           ),
@@ -385,7 +610,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   Widget _buildEmployeeLoginScreen() {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F4EC),
+      backgroundColor: AdminTheme.background,
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
@@ -393,9 +618,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             constraints: const BoxConstraints(maxWidth: 420),
             padding: const EdgeInsets.all(32),
             decoration: BoxDecoration(
-              color: const Color(0xFFFFFDFA),
+              color: AdminTheme.surfaceIvory,
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: const Color(0xFFE5DFD3)),
+              border: Border.all(color: AdminTheme.border),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.05),
@@ -410,14 +635,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               children: [
                 Center(
                   child: Container(
-                    width: 72,
-                    height: 72,
+                    width: 88,
+                    height: 88,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF203F35),
-                      borderRadius: BorderRadius.circular(20),
+                      color: AdminTheme.textDark,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: AdminTheme.border),
                     ),
-                    child: const Center(
-                      child: Icon(Icons.restaurant, color: Color(0xFFC3AA7F), size: 36),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(24),
+                      child: Image.asset(
+                        'lib/logo/BalaiSilayanLogo_512.png',
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Icon(
+                          Icons.restaurant,
+                          color: AdminTheme.goldAccent,
+                          size: 36,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -425,20 +662,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 const Text(
                   'Balai Silayan',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+                  style: TextStyle(fontFamily: 'Libre Baskerville', fontSize: 22, fontWeight: FontWeight.bold, color: AdminTheme.textDark),
                 ),
                 const SizedBox(height: 4),
                 const Text(
                   'Employee POS & Admin Portal',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: Color(0xFF687368)),
+                  style: TextStyle(fontSize: 12, color: AdminTheme.mutedDark),
                 ),
                 const SizedBox(height: 32),
                 TextField(
                   controller: _usernameController,
                   decoration: InputDecoration(
                     labelText: 'Employee ID / Username',
-                    prefixIcon: const Icon(Icons.person_outline, color: Color(0xFF203F35)),
+                    prefixIcon: const Icon(Icons.person_outline, color: AdminTheme.textDark),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
@@ -448,7 +685,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   obscureText: true,
                   decoration: InputDecoration(
                     labelText: 'Access Passcode',
-                    prefixIcon: const Icon(Icons.lock_outline, color: Color(0xFF203F35)),
+                    prefixIcon: const Icon(Icons.lock_outline, color: AdminTheme.textDark),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
@@ -457,7 +694,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   height: 52,
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF203F35),
+                      backgroundColor: AdminTheme.textDark,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     onPressed: _isLoggingIn ? null : _handleLogin,

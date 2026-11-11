@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:convert';
 import 'menu_screen.dart';
 import 'checkout_screen.dart';
@@ -8,6 +7,8 @@ import 'assistance_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'user_session.dart';
 import 'config/api_config.dart';
+import 'services/global_socket_listener.dart';
+import '../widgets/finished_order_dialog.dart';
 
 class ShoppingCartScreen extends StatefulWidget {
   final Map<FoodItem, int> cart;
@@ -35,7 +36,6 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   bool _isLoadingParentItems = false;
   List<dynamic> _sessionOrdersSummary = [];
   double _sessionGrandTotal = 0.0;
-  late io.Socket _cartSocket;
   bool _dialogShown = false;
 
   String get _baseUrl => ApiConfig.baseUrl;
@@ -55,35 +55,17 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   }
 
   void _connectCartSocket() {
-    try {
-      _cartSocket = io.io(
-        _baseUrl,
-        io.OptionBuilder()
-            .setTransports(['websocket', 'polling'])
-            .disableAutoConnect()
-            .build(),
-      );
-
-      _cartSocket.onConnect((_) {
-        final int? tableId = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber;
-        if (tableId != null) {
-          _cartSocket.emit('join_room', 'table_$tableId');
-        }
-        final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-        if (sessionId != null) {
-          _cartSocket.emit('join_room', 'session_$sessionId');
-        }
-      });
-
-      _cartSocket.on('order_paid', _handleTableOrderFinished);
-      _cartSocket.on('table_session_closed', _handleTableOrderFinished);
-      _cartSocket.on('session_cancelled', _handleTableOrderFinished);
-      _cartSocket.on('order_status_updated', _handleTableOrderEvent);
-      _cartSocket.on('order_updated', _handleTableOrderEvent);
-      _cartSocket.connect();
-    } catch (_) {}
+    // Phase D: single socket na ang gamitin ng lahat ng screens - ang
+    // GlobalSocketListener na. Hindi na gumagamit ng ibang socket connection
+    // ang cart para hindi mabubuo ang duplicate order-event handlers.
+    GlobalSocketListener.instance.start(context: context);
+    GlobalSocketListener.instance.registerTableIdentity(
+      tableId: widget.tableId,
+      tableNumber: UserSession.activeTableNumber,
+    );
+    GlobalSocketListener.instance.setFallbackOrderEventHandler(_handleTableOrderEvent);
+    GlobalSocketListener.instance.setFallbackOrderSessionClosed(_handleTableOrderFinished);
   }
-
   void _handleTableOrderEvent(dynamic data) {
     if (!mounted) return;
     if (data == null) return;
@@ -91,10 +73,11 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     final Map<String, dynamic> payload = data is Map<String, dynamic> ? data : Map<String, dynamic>.from(data as Map);
     final Map<String, dynamic> orderPayload = payload['order'] is Map ? Map<String, dynamic>.from(payload['order']) : payload;
 
-    final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-    final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? payload['table_id']?.toString() ?? '');
-
-    if (eventTableId != null && eventTableId != currentTable) {
+    GlobalSocketListener.instance.registerTableIdentity(
+      tableId: widget.tableId,
+      tableNumber: UserSession.activeTableNumber,
+    );
+    if (!GlobalSocketListener.instance.isEventForCurrentTable(orderPayload, payload)) {
       return;
     }
 
@@ -165,7 +148,8 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B3B2B)),
             onPressed: () {
               Navigator.pop(ctx);
-              UserSession.clearSession();
+              // Non-destructive: huwag i-clear ang buong session — may iba pang
+              // active tickets ang table. Bumalik lang sa order choices.
               Navigator.pushAndRemoveUntil(
                 context,
                 MaterialPageRoute(
@@ -209,44 +193,17 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     if (_dialogShown) return;
     _dialogShown = true;
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFFFFFDFA),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Order Finished', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
-        content: Text('Order $orderCode is done and has been settled.'),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
-            onPressed: () {
-              Navigator.pop(ctx);
-              UserSession.clearSession();
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => OrderTypeSelectionScreen(
-                    tableId: currentTable,
-                    tableNumber: currentTable,
-                  ),
-                ),
-                (route) => false,
-              );
-            },
-            child: const Text('Back to Selection', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      FinishedOrderDialog.show(
+        orderCode: orderCode,
+        orderId: UserSession.formatOrderCode(eventOrderId ?? UserSession.lastPlacedOrderId),
+      );
+    });
   }
 
   @override
   void dispose() {
-    try {
-      _cartSocket.disconnect();
-      _cartSocket.dispose();
-    } catch (_) {}
     super.dispose();
   }
 
@@ -266,7 +223,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
       final response = await http.get(
         Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/bill'),
         headers: headers,
-      );
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);

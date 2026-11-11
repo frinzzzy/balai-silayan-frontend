@@ -7,6 +7,10 @@ import '../config/api_config.dart';
 class ApiService {
   static String get _baseUrl => ApiConfig.baseUrl;
 
+  /// Default API timeout — user-friendly sa cold start ng server (madalas
+  /// 30-50+ sec sa Render free tier kapag natutulog ang backend).
+  static const Duration _defaultTimeout = Duration(seconds: 15);
+
   static Map<String, String> get _authHeaders {
     final token = UserSession.customerSessionToken ?? UserSession.authToken;
     final Map<String, String> headers = {"Content-Type": "application/json"};
@@ -37,7 +41,7 @@ class ApiService {
       final response = await http.get(
         Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$tableId'),
         headers: _authHeaders,
-      );
+      ).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         return data['orders'] ?? data['data'] ?? [];
@@ -58,7 +62,7 @@ class ApiService {
           ? Uri.parse('$_baseUrl/api/v1/customer/sessions/$targetSessionId/bill')
           : Uri.parse('$_baseUrl/api/v1/tables/$targetTableId/bill');
 
-      final response = await http.get(uri, headers: _authHeaders);
+      final response = await http.get(uri, headers: _authHeaders).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
         return resData['data'] is Map ? resData['data'] : null;
@@ -76,7 +80,7 @@ class ApiService {
         Uri.parse('$_baseUrl/api/v1/dev/force-active-session'),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({"table_id": tableId}),
-      );
+      ).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
         return resData['data'] is Map ? resData['data'] : null;

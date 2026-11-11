@@ -8,6 +8,9 @@ import 'theme/app_theme.dart';
 import 'config/api_config.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
+import 'services/supabase_realtime_service.dart';
+import 'widgets/session_notice_sheet.dart';
 
 class QrScannerScreen extends StatefulWidget {
   const QrScannerScreen({super.key});
@@ -55,6 +58,11 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
           token: sessionToken,
           qr: cleanVal,
         );
+        unawaited(SupabaseRealtimeService.instance.onSessionChanged());
+
+        if (mounted) {
+          await SessionNotice.showIfNeeded(context);
+        }
 
         _scannerController.stop();
 
@@ -71,23 +79,29 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
           );
         }
       } else {
-        _handleManualFallback(cleanVal);
+        await _handleManualFallback(cleanVal);
       }
     } catch (_) {
-      _handleManualFallback(scannedValue);
+      await _handleManualFallback(scannedValue);
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
   }
 
-  void _handleManualFallback(String val) {
+  Future<void> _handleManualFallback(String val) async {
     int scannedTableId = int.tryParse(val.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1;
     UserSession.setSession(
       tableId: scannedTableId,
       tableNumber: scannedTableId,
       qr: val,
     );
+    unawaited(SupabaseRealtimeService.instance.onSessionChanged());
     _scannerController.stop();
+
+    if (mounted) {
+      await SessionNotice.showIfNeeded(context);
+    }
+    
     if (mounted) {
       Navigator.pushReplacement(
         context,

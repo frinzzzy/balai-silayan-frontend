@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/admin_service.dart';
+import '../../../theme/app_theme.dart';
+import '../../../utils/menu_images.dart';
 
 class StockManagementScreen extends StatefulWidget {
   final VoidCallback onRefresh;
@@ -67,11 +69,11 @@ class StockManagementScreenState extends State<StockManagementScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFFFFFDFA),
+          backgroundColor: AdminTheme.surfaceIvory,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text(
             'Update Stock • $itemName',
-            style: const TextStyle(fontFamily: 'Libre Baskerville', fontWeight: FontWeight.bold, color: Color(0xFF203F35), fontSize: 16),
+            style: const TextStyle(fontFamily: 'Libre Baskerville', fontWeight: FontWeight.bold, color: AdminTheme.textDark, fontSize: 16),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -79,26 +81,26 @@ class StockManagementScreenState extends State<StockManagementScreen> {
             children: [
               Text(
                 'Current On-Hand Quantity: $currentStock',
-                style: const TextStyle(fontFamily: 'Inter', fontSize: 13, color: Color(0xFF687368)),
+                style: const TextStyle(fontFamily: 'Inter', fontSize: 13, color: AdminTheme.mutedDark),
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: stockController,
                 keyboardType: TextInputType.number,
-                style: const TextStyle(fontFamily: 'Inter', fontSize: 14, color: Color(0xFF203F35)),
+                style: const TextStyle(fontFamily: 'Inter', fontSize: 14, color: AdminTheme.textDark),
                 decoration: InputDecoration(
                   labelText: 'New Stock Quantity',
                   filled: true,
-                  fillColor: const Color(0xFFFFFDFA),
+                  fillColor: AdminTheme.surfaceIvory,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                 ),
               ),
               const SizedBox(height: 16),
-              const Text('Adjustment Reason / Type:', style: TextStyle(fontFamily: 'Inter', fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+              const Text('Adjustment Reason / Type:', style: TextStyle(fontFamily: 'Inter', fontSize: 12, fontWeight: FontWeight.w600, color: AdminTheme.textDark)),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 value: adjustmentType,
-                style: const TextStyle(fontFamily: 'Inter', fontSize: 13, color: Color(0xFF203F35)),
+                style: const TextStyle(fontFamily: 'Inter', fontSize: 13, color: AdminTheme.textDark),
                 decoration: InputDecoration(
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -117,10 +119,10 @@ class StockManagementScreenState extends State<StockManagementScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel', style: TextStyle(fontFamily: 'Inter', color: Color(0xFF687368))),
+              child: const Text('Cancel', style: TextStyle(fontFamily: 'Inter', color: AdminTheme.mutedDark)),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+              style: ElevatedButton.styleFrom(backgroundColor: AdminTheme.textDark),
               onPressed: () async {
                 final int? newQty = int.tryParse(stockController.text.trim());
                 if (newQty == null || newQty < 0) {
@@ -186,9 +188,9 @@ class StockManagementScreenState extends State<StockManagementScreen> {
     }).toList();
 
     return Container(
-      color: const Color(0xFFF8F4EC),
+      color: AdminTheme.background,
       child: RefreshIndicator(
-        color: const Color(0xFF203F35),
+        color: AdminTheme.textDark,
         onRefresh: _loadInventory,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -205,14 +207,14 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                       fontFamily: 'Libre Baskerville',
                       fontSize: 28,
                       fontWeight: FontWeight.w400,
-                      color: Color(0xFF203F35),
+                      color: AdminTheme.textDark,
                       height: 1.3,
                     ),
                   ),
                   SizedBox(height: 8),
                   Text(
                     'Monitor live on-hand quantities, low stock warnings, and ingredient inventory levels.',
-                    style: TextStyle(fontFamily: 'Inter', fontSize: 14, color: Color(0xFF687368), height: 1.5),
+                    style: TextStyle(fontFamily: 'Inter', fontSize: 14, color: AdminTheme.mutedDark, height: 1.5),
                   ),
                 ],
               ),
@@ -221,29 +223,29 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                 height: 48,
                 padding: const EdgeInsets.symmetric(horizontal: 14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFDFA),
+                  color: AdminTheme.surfaceIvory,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFE5DFD3)),
+                  border: Border.all(color: AdminTheme.border),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.search, size: 18, color: Color(0xFF687368)),
+                    const Icon(Icons.search, size: 18, color: AdminTheme.mutedDark),
                     const SizedBox(width: 12),
                     Expanded(
                       child: TextField(
                         controller: _searchController,
                         onChanged: (val) => setState(() => _searchQuery = val.trim()),
-                        style: const TextStyle(fontFamily: 'Inter', fontSize: 13, color: Color(0xFF203F35)),
+                        style: const TextStyle(fontFamily: 'Inter', fontSize: 13, color: AdminTheme.textDark),
                         decoration: const InputDecoration(
                           hintText: 'Search inventory items...',
-                          hintStyle: TextStyle(fontFamily: 'Inter', fontSize: 13, color: Color(0xFF687368)),
+                          hintStyle: TextStyle(fontFamily: 'Inter', fontSize: 13, color: AdminTheme.mutedDark),
                           border: InputBorder.none,
                         ),
                       ),
                     ),
                     if (_searchQuery.isNotEmpty)
                       IconButton(
-                        icon: const Icon(Icons.clear, size: 16, color: Color(0xFF687368)),
+                        icon: const Icon(Icons.clear, size: 16, color: AdminTheme.mutedDark),
                         onPressed: () {
                           _searchController.clear();
                           setState(() => _searchQuery = '');
@@ -269,16 +271,16 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                           fontFamily: 'Inter',
                           fontSize: 12,
                           fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                          color: isSelected ? Colors.white : const Color(0xFF203F35),
+                          color: isSelected ? Colors.white : AdminTheme.textDark,
                         ),
                       ),
                       selected: isSelected,
-                      selectedColor: const Color(0xFF203F35),
-                      backgroundColor: const Color(0xFFFFFDFA),
+                      selectedColor: AdminTheme.textDark,
+                      backgroundColor: AdminTheme.surfaceIvory,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                         side: BorderSide(
-                          color: isSelected ? const Color(0xFF203F35) : const Color(0xFFE5DFD3),
+                          color: isSelected ? AdminTheme.textDark : AdminTheme.border,
                         ),
                       ),
                       onSelected: (val) {
@@ -293,7 +295,7 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                   ? const Center(
                 child: Padding(
                   padding: EdgeInsets.all(40.0),
-                  child: CircularProgressIndicator(color: Color(0xFF203F35)),
+                  child: CircularProgressIndicator(color: AdminTheme.textDark),
                 ),
               )
                   : filtered.isEmpty
@@ -302,9 +304,9 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                   padding: const EdgeInsets.all(40.0),
                   child: Column(
                     children: [
-                      const Icon(Icons.inventory_2_outlined, size: 48, color: Color(0xFF687368)),
+                      const Icon(Icons.inventory_2_outlined, size: 48, color: AdminTheme.mutedDark),
                       const SizedBox(height: 12),
-                      const Text('No inventory items found.', style: TextStyle(fontFamily: 'Inter', fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
+                      const Text('No inventory items found.', style: TextStyle(fontFamily: 'Inter', fontSize: 14, fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
                     ],
                   ),
                 ),
@@ -319,7 +321,7 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                   final double price = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
                   final int stock = item['stock_quantity'] ?? 50;
                   final int threshold = item['low_stock_threshold'] ?? 10;
-                  final String? imageUrl = item['image_url'];
+                  final String? localImage = localMenuImageFor(name);
 
                   String statusLabel = 'In Stock';
                   Color statusBg = const Color(0xFFD1FAE5);
@@ -339,9 +341,9 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                     margin: const EdgeInsets.only(bottom: 14),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFFDFA),
+                      color: AdminTheme.surfaceIvory,
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFE5DFD3)),
+                      border: Border.all(color: AdminTheme.border),
                       boxShadow: const [
                         BoxShadow(
                           color: Color.fromRGBO(41, 61, 48, 0.02),
@@ -356,18 +358,18 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                           width: 64,
                           height: 64,
                           decoration: BoxDecoration(
-                            color: const Color(0xFFEEE7D9),
+                            color: AdminTheme.warningBg,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(12),
-                            child: imageUrl != null && imageUrl.isNotEmpty
-                                ? Image.network(
-                              imageUrl,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => const Icon(Icons.restaurant, color: Color(0xFF203F35)),
-                            )
-                                : const Icon(Icons.restaurant, color: Color(0xFF203F35)),
+                            child: localImage != null && localImage.isNotEmpty
+                                ? Image.asset(
+                                    localImage,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => const Icon(Icons.restaurant, color: AdminTheme.textDark),
+                                  )
+                                : const Icon(Icons.restaurant, color: AdminTheme.textDark),
                           ),
                         ),
                         const SizedBox(width: 14),
@@ -385,7 +387,7 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                                         fontFamily: 'Inter',
                                         fontWeight: FontWeight.bold,
                                         fontSize: 15,
-                                        color: Color(0xFF203F35),
+                                        color: AdminTheme.textDark,
                                       ),
                                     ),
                                   ),
@@ -410,7 +412,7 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                               const SizedBox(height: 4),
                               Text(
                                 '₱${price.toStringAsFixed(2)} • Threshold: $threshold',
-                                style: const TextStyle(fontFamily: 'Inter', fontSize: 12, color: Color(0xFF687368)),
+                                style: const TextStyle(fontFamily: 'Inter', fontSize: 12, color: AdminTheme.mutedDark),
                               ),
                               const SizedBox(height: 8),
                               Row(
@@ -420,7 +422,7 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                                     children: [
                                       const Text(
                                         'On-hand: ',
-                                        style: TextStyle(fontFamily: 'Inter', fontSize: 12, color: Color(0xFF687368)),
+                                        style: TextStyle(fontFamily: 'Inter', fontSize: 12, color: AdminTheme.mutedDark),
                                       ),
                                       Text(
                                         '$stock units',
@@ -428,14 +430,14 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                                           fontFamily: 'Inter',
                                           fontWeight: FontWeight.w900,
                                           fontSize: 14,
-                                          color: stock == 0 ? const Color(0xFFEF4444) : const Color(0xFF203F35),
+                                          color: stock == 0 ? const Color(0xFFEF4444) : AdminTheme.textDark,
                                         ),
                                       ),
                                     ],
                                   ),
                                   ElevatedButton(
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF203F35),
+                                      backgroundColor: AdminTheme.textDark,
                                       foregroundColor: Colors.white,
                                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

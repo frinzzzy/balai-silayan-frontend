@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:convert';
 import 'dart:async';
 import 'order_status_screen.dart';
@@ -9,8 +8,13 @@ import 'food_details_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'session_bill_screen.dart';
 import 'user_session.dart';
+import '../widgets/finished_order_dialog.dart';
 import 'services/audio_notification_service.dart';
+import 'services/global_socket_listener.dart';
 import 'services/socket_service.dart';
+import 'services/order_context.dart';
+import 'services/order_event_bus.dart';
+import 'services/order_event_router.dart';
 import 'config/api_config.dart';
 
 class FoodItem {
@@ -187,18 +191,6 @@ class _MenuScreenState extends State<MenuScreen> {
 
   String get _baseUrl => ApiConfig.baseUrl;
 
-  /// Normalizes the backend URL into a socket.io compatible endpoint
-  /// (ws:// / wss://) para sa secure cloud deployments (hal. HTTPS sa Render).
-  String get _socketUrl {
-    var url = _baseUrl;
-    if (url.startsWith('https://')) {
-      url = 'wss://${url.substring('https://'.length)}';
-    } else if (url.startsWith('http://')) {
-      url = 'ws://${url.substring('http://'.length)}';
-    }
-    return url;
-  }
-
   int? _chosenTableNumber;
   bool _isTakeoutSelected = false;
 
@@ -218,12 +210,21 @@ class _MenuScreenState extends State<MenuScreen> {
 
   List<MenuCategory> _categoriesList = [];
   Timer? _heartbeatTimer;
-  late io.Socket _menuSocket;
+  Timer? _statusPollTimer;
   bool _dialogShown = false;
+  int? _refreshToken;
+  int? _contextToken;
+  bool _pollInFlight = false;
+
+  /// Huling nakita na status per order (polling fallback detection).
+  final Map<String, String> _polledOrderStatuses = <String, String>{};
 
   @override
   void initState() {
     super.initState();
+    GlobalSocketListener.instance.resetTableIdentity();
+    AudioNotificationService.resetOrderNotificationDedupe();
+    _polledOrderStatuses.clear();
     if (widget.tableNumber != null) {
       _chosenTableNumber = widget.tableNumber;
       UserSession.activeTableNumber = widget.tableNumber;
@@ -237,6 +238,10 @@ class _MenuScreenState extends State<MenuScreen> {
     }
 
     UserSession.isAdditionalOrder = widget.isAdditionalOrder;
+    GlobalSocketListener.instance.registerTableIdentity(
+      tableId: widget.tableId,
+      tableNumber: widget.tableNumber ?? _chosenTableNumber,
+    );
     if (!widget.isAdditionalOrder) {
       UserSession.targetParentOrderId = null;
       UserSession.lastPlacedOrderId = null;
@@ -245,39 +250,97 @@ class _MenuScreenState extends State<MenuScreen> {
     _fetchDatabaseCategories();
     _fetchLiveDatabaseMenu();
     _syncExistingOrdersForTable();
+    _fetchBillLockState();
     _startHeartbeatTimer();
-    _connectMenuSocket();
+    _startStatusPollTimer();
+    GlobalSocketListener.instance.start(context: context);
+    // I-set natin ang MenuScreen bilang ang default order handler. Ang mga
+    // pushed screens (ex: OrderStatusScreen) ay nag-override nito habang naka-istante,
+    // at ibabalik ang default kapag may nag-pop na naglalayong magreveal ng MenuScreen.
+    GlobalSocketListener.instance.setFallbackOrderEventHandler(_handleTableOrderEvent);
+    GlobalSocketListener.instance.setFallbackOrderSessionClosed(_handleTableOrderFinished);
+    GlobalSocketListener.instance.setOnStockChanged(() { _fetchLiveDatabaseMenu(); });
+    // Tanging isang screen-level handler lang dati ang nagsisilbing refresh.
+    // Ngayon, bawat screen ay may sariling subscription sa OrderEventBus.
+    _refreshToken = OrderEventBus.instance.subscribeRefresh(_syncExistingOrdersForTable);
+
+    // Tukuyin ang order context ng screen na ito para tama ang pop-up policy.
+    _contextToken = OrderContext.instance.enter(
+      mode: widget.isAdditionalOrder || UserSession.isAdditionalOrder
+          ? CustomerOrderMode.additionalOrder
+          : CustomerOrderMode.newOrder,
+      activeOrderId: UserSession.lastPlacedOrderId,
+      linkedParentId: UserSession.targetParentOrderId,
+    );
   }
 
-  void _connectMenuSocket() {
+  bool _isCurrentTicketBillLocked() {
+    if (!(widget.isAdditionalOrder || UserSession.isAdditionalOrder)) {
+      return false;
+    }
+    final dynamic parentId =
+        UserSession.targetParentOrderId ?? UserSession.lastPlacedOrderId;
+    return UserSession.isTicketBillRequested(parentId);
+  }
+
+  Future<void> _fetchBillLockState() async {
+    final int tableNum = _chosenTableNumber ??
+        UserSession.activeTableNumber ??
+        UserSession.activeTableId ??
+        7;
     try {
-      _menuSocket = io.io(
-        _socketUrl,
-        io.OptionBuilder()
-            .setTransports(['websocket', 'polling'])
-            .enableAutoConnect()
-            .build(),
-      );
+      final response = await http
+          .get(Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill'))
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return;
 
-      _menuSocket.onConnect((_) {
-        final int? tableId = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber;
-        if (tableId != null) {
-          _menuSocket.emit('join_room', 'table_$tableId');
-        }
-        final int? sessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-        if (sessionId != null) {
-          _menuSocket.emit('join_room', 'session_$sessionId');
-        }
-      });
+      final dynamic decoded = jsonDecode(response.body);
+      final Map<String, dynamic> data =
+          decoded is Map && decoded['data'] is Map
+              ? Map<String, dynamic>.from(decoded['data'])
+              : <String, dynamic>{};
+      final List orders = data['orders'] is List ? data['orders'] : [];
 
-      _menuSocket.on('order_paid', _handleTableOrderFinished);
-      _menuSocket.on('table_session_closed', _handleTableOrderFinished);
-      _menuSocket.on('session_cancelled', _handleTableOrderFinished);
-      _menuSocket.on('order_status_updated', _handleTableOrderEvent);
-      _menuSocket.on('order_updated', _handleTableOrderEvent);
-      _menuSocket.on('stock_updated', (_) => _fetchLiveDatabaseMenu());
-      _menuSocket.connect();
-    } catch (_) {}
+      UserSession.clearAllBillRequests();
+      for (final dynamic raw in orders) {
+        if (raw is! Map) continue;
+        final dynamic orderId = raw['order_id'] ?? raw['id'];
+        final dynamic requestedAt = raw['bill_requested_at'];
+        if (requestedAt != null) {
+          UserSession.setTicketBillRequested(orderId, requestedAt);
+        }
+      }
+      if (mounted) setState(() {});
+    } catch (_) {
+      // Best-effort lang: hindi dapat harangin ang menu kung offline.
+    }
+  }
+
+  Future<bool> _ensureOrderingNotLocked() async {
+    if (!_isCurrentTicketBillLocked()) return true;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Bill already requested',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+        ),
+        content: const Text(
+          'Naka-request na ang bill para sa ticket na ito. Ask staff to reopen ordering bago magdagdag ng items.',
+          style: TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+    return false;
   }
 
   void _handleTableOrderEvent(dynamic data) {
@@ -287,68 +350,44 @@ class _MenuScreenState extends State<MenuScreen> {
     final Map<String, dynamic> payload = data is Map<String, dynamic> ? data : Map<String, dynamic>.from(data as Map);
     final Map<String, dynamic> orderPayload = payload['order'] is Map ? Map<String, dynamic>.from(payload['order']) : payload;
 
-    final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-    final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? payload['table_id']?.toString() ?? '');
     final int? eventSessionId = int.tryParse(orderPayload['session_id']?.toString() ?? payload['session_id']?.toString() ?? '');
     final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
 
+    // Itakda muna ang table identity ng screen na ito (PK at display number)
+    // para tama ang comparison kahit magkaiba ang format na dala ng payload.
+    GlobalSocketListener.instance.registerTableIdentity(
+      tableId: widget.tableId,
+      tableNumber: widget.tableNumber ?? _chosenTableNumber,
+    );
+
     // 1. STRICT EVENT FILTERING
-    if (eventTableId != null) {
-      if (eventTableId != currentTable) {
-        return; // Mismatch table, ignore
-      }
-    } else if (eventSessionId != null) {
+    if (!GlobalSocketListener.instance.isEventForCurrentTable(orderPayload, payload)) {
+      return; // Ibang table/session, ignore
+    }
+    if (eventSessionId != null) {
       final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-      if (currentSessionId != null && eventSessionId != currentSessionId) {
-        return; // Mismatch session, ignore
+      final int? eventTableFromPayload = int.tryParse(orderPayload['table_id']?.toString() ?? payload['table_id']?.toString() ?? '');
+      // Session scoping lang ang gamitin kapag walang table info sa payload.
+      if (eventTableFromPayload == null && currentSessionId != null && eventSessionId != currentSessionId) {
+        return;
       }
     } else if (eventOrderId == null) {
-      return; // Neither table_id, session_id, nor order_id present, ignore
+      return; // Wala kahit isang identifier, ignore
     }
 
     final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
     final String orderCode = eventOrderId != null ? UserSession.formatOrderCode(eventOrderId) : (orderPayload['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}');
 
-    // 2. GLOBAL NOTIFICATIONS FIRST (Unconditional for valid table/session scope)
-    if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
-      AudioNotificationService.showAggressiveBanner(
-        context: context,
-        title: "$orderCode: Payment Completed",
-        message: "Your table session receipt has been settled.",
-        backgroundColor: const Color(0xFF10B981),
-        icon: Icons.check_circle,
-      );
-    } else if (status == 'DECLINED' || status == 'REJECTED') {
-      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
-      AudioNotificationService.showAggressiveBanner(
-        context: context,
-        title: "$orderCode: Order Status: DECLINED",
-        message: "Reason: ${reason.isNotEmpty ? reason : "Please check with staff for details."}",
-        backgroundColor: const Color(0xFFEF4444),
-        icon: Icons.cancel,
-      );
-    } else if (status == 'PREPARING') {
-      AudioNotificationService.showAggressiveBanner(
-        context: context,
-        title: "$orderCode: Order Status: PREPARING",
-        message: "The kitchen is now preparing your delicious meal.",
-        backgroundColor: const Color(0xFFD7BC86),
-        icon: Icons.kitchen,
-      );
-    } else if (status == 'READY' || status == 'SERVED') {
-      AudioNotificationService.showAggressiveBanner(
-        context: context,
-        title: status == 'SERVED' ? "$orderCode: Order Status: SERVED" : "$orderCode: Order Status: READY",
-        message: status == 'SERVED' ? "Your order is hot and ready for your table." : "Your order is ready for pickup / service.",
-        backgroundColor: const Color(0xFF22C55E),
-        icon: Icons.restaurant,
-      );
-    }
+    // 2. NOTIFICATIONS ay central na (GlobalSocketListener -> NotificationCenter).
+    // Dito na lang ang UI-specific pop-ups (dialogs).
 
-    // 3. ISOLATE INTERNAL POP-UPS (THE SPOKE)
+    // 3. INTERNAL POP-UPS (THE SPOKE)
+    // Terminal (COMPLETED/PAID/CLOSED/SETTLED) pop-ups ay hawak na ng
+    // OrderEventRouter ayon sa OrderContext. Dito na lang ang decline dialog,
+    // na screen-specific at may reason payload.
     final dynamic currentTrackedOrderId = (widget.isAdditionalOrder || UserSession.isAdditionalOrder)
         ? UserSession.targetParentOrderId
-        : (UserSession.lastPlacedOrderId ?? UserSession.firstOrderId);
+        : UserSession.lastPlacedOrderId;
 
     bool shouldShowPopup = true;
     if (eventOrderId != null && currentTrackedOrderId != null) {
@@ -357,18 +396,12 @@ class _MenuScreenState extends State<MenuScreen> {
       }
     }
 
-    // 4. TIMING FIX & DIALOG TRIGGER
-    if (shouldShowPopup) {
-      if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) _handleTableOrderFinished(payload);
-        });
-      } else if (status == 'DECLINED' || status == 'REJECTED') {
-        final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) _showOrderDeclinedDialog(orderCode, reason);
-        });
-      }
+    if (shouldShowPopup &&
+        (status == 'DECLINED' || status == 'REJECTED' || status == 'CANCELLED')) {
+      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) _showOrderDeclinedDialog(orderCode, reason);
+      });
     }
   }
 
@@ -425,7 +458,7 @@ class _MenuScreenState extends State<MenuScreen> {
                   ),
                 ),
                 (route) => false,
-              );
+            );
             },
             child: const Text('Acknowledge / Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
@@ -444,15 +477,15 @@ class _MenuScreenState extends State<MenuScreen> {
           : (eventPayloadData is Map ? Map<String, dynamic>.from(eventPayloadData) : {});
       final Map<String, dynamic> orderPayload = data['order'] is Map ? Map<String, dynamic>.from(data['order']) : data;
 
-      final int currentTable = _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-      final int? eventTableId = int.tryParse(orderPayload['table_id']?.toString() ?? orderPayload['table_number']?.toString() ?? data['table_id']?.toString() ?? '');
       final dynamic eventSessionId = orderPayload['session_id'] ?? data['session_id'];
 
-      if (eventTableId != null && eventTableId != currentTable) {
-        return; // Ignore events for other tables
+      if (!GlobalSocketListener.instance.isEventForCurrentTable(orderPayload, data)) {
+        return; // Ibang table, ignore
       }
       
-      if (eventTableId == null && eventSessionId != null) {
+      final int? eventTableFromPayload = int.tryParse(orderPayload['table_id']?.toString() ?? data['table_id']?.toString() ?? '');
+
+      if (eventTableFromPayload == null && eventSessionId != null) {
         final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
         if (currentSessionId != null && int.tryParse(eventSessionId.toString()) != currentSessionId) {
           return; // Ignore events for other sessions
@@ -462,9 +495,9 @@ class _MenuScreenState extends State<MenuScreen> {
       final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? data['order_id'] ?? data['id'];
 
       final bool isAdd = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
-      final dynamic targetId = isAdd 
-          ? UserSession.targetParentOrderId 
-          : (UserSession.lastPlacedOrderId ?? UserSession.firstOrderId);
+      final dynamic targetId = isAdd
+          ? UserSession.targetParentOrderId
+          : UserSession.lastPlacedOrderId;
 
       if (eventOrderId != null && targetId != null) {
         if (!SocketService.isSameOrder(eventOrderId, targetId)) {
@@ -473,39 +506,33 @@ class _MenuScreenState extends State<MenuScreen> {
       }
     }
     
+    final dynamic resolvedOrderId = eventPayloadData is Map
+        ? (eventPayloadData['order_id'] ?? eventPayloadData['id'])
+        : null;
+    final String resolvedOrderCode = eventPayloadData is Map
+        ? (eventPayloadData['order_code']?.toString() ?? '#BS-${resolvedOrderId ?? ""}').trim()
+        : 'Ticket';
+
     if (_dialogShown) return;
     _dialogShown = true;
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFFFFFDFA),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Order Finished', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
-        content: const Text('Your order session is done and has been settled.'),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
-            onPressed: () {
-              Navigator.pop(ctx);
-              UserSession.clearSession();
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => OrderTypeSelectionScreen(
-                    tableId: _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7,
-                    tableNumber: _chosenTableNumber ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7,
-                  ),
-                ),
-                (route) => false,
-              );
-            },
-            child: const Text('Back to Selection', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      FinishedOrderDialog.show(
+        orderCode: resolvedOrderCode,
+        orderId: UserSession.formatOrderCode(resolvedOrderId ?? UserSession.lastPlacedOrderId),
+      );
+    });
+  }
+
+  /// Polling fallback para sa notifications: kahit patay/disconnected ang
+  /// socket, nakikita pa rin ang status changes at nagpapakita ng banner.
+  void _startStatusPollTimer() {
+    _statusPollTimer?.cancel();
+    _statusPollTimer = Timer.periodic(const Duration(seconds: 12), (timer) {
+      if (!mounted) return;
+      _syncExistingOrdersForTable();
+    });
   }
 
   void _startHeartbeatTimer() {
@@ -517,7 +544,7 @@ class _MenuScreenState extends State<MenuScreen> {
       try {
         final Map<String, String> headers = {"Content-Type": "application/json"};
         if (token != null && token.isNotEmpty) headers["Authorization"] = "Bearer $token";
-        await http.post(Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/activity'), headers: headers);
+        await http.post(Uri.parse('$_baseUrl/api/v1/customer/sessions/$sessionId/activity'), headers: headers).timeout(const Duration(seconds: 10));
       } catch (_) {}
     });
   }
@@ -525,11 +552,16 @@ class _MenuScreenState extends State<MenuScreen> {
   @override
   void dispose() {
     _heartbeatTimer?.cancel();
+    _statusPollTimer?.cancel();
+    if (_refreshToken != null) {
+      OrderEventBus.instance.unsubscribe(_refreshToken!);
+      _refreshToken = null;
+    }
+    if (_contextToken != null) {
+      OrderContext.instance.leave(_contextToken!);
+      _contextToken = null;
+    }
     _searchController.dispose();
-    try {
-      _menuSocket.disconnect();
-      _menuSocket.dispose();
-    } catch (_) {}
     super.dispose();
   }
 
@@ -542,7 +574,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<void> _fetchDatabaseCategories() async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/api/v1/categories'), headers: _authHeaders);
+      final response = await http.get(Uri.parse('$_baseUrl/api/v1/categories'), headers: _authHeaders).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final Map<String, dynamic> decodedData = jsonDecode(response.body);
         final List catList = decodedData['data'] ?? [];
@@ -558,9 +590,11 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   Future<void> _syncExistingOrdersForTable() async {
+    if (_pollInFlight) return;
+    _pollInFlight = true;
     final int tableId = _chosenTableNumber ?? 7;
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$tableId'));
+      final response = await http.get(Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$tableId')).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final List ordersList = data['orders'] ?? data['data'] ?? [];
@@ -572,14 +606,90 @@ class _MenuScreenState extends State<MenuScreen> {
             UserSession.sessionId = rawSessionId.toString();
           }
         }
+
+        final Set<String> seenIds = <String>{};
+
+        // Polling fallback: i-detect ang status changes at mag-notify kahit
+        // patay/disconnected ang socket (dedupe ang humaharang sa doble).
+        for (final dynamic raw in ordersList) {
+          if (raw is! Map) continue;
+          final dynamic orderId = raw['order_id'] ?? raw['id'];
+          final String status =
+              (raw['order_status'] ?? raw['status'] ?? '').toString().toUpperCase();
+          if (orderId == null || status.isEmpty) continue;
+
+          final String key = orderId.toString();
+          seenIds.add(key);
+          final String? previousStatus = _polledOrderStatuses[key];
+          _polledOrderStatuses[key] = status;
+
+          if (previousStatus != null && previousStatus != status) {
+            OrderEventRouter.instance.onStatusObserved(
+              status: status,
+              orderId: orderId,
+              reason: raw['decline_reason']?.toString() ?? raw['reason']?.toString(),
+              parentOrderId: raw['parent_order_id'],
+              eventType: 'poll',
+            );
+          }
+        }
+
+        // Ang COMPLETED/PAID ay tinatanggal sa /unfinished kaya hindi na
+        // lumalabas dito. I-check ang mga dating nakita pero nawala na, para
+        // hindi mawala ang notification kapag namiss ng socket ang event.
+        final List<String> vanished = _polledOrderStatuses.keys
+            .where((id) => !seenIds.contains(id))
+            .toList();
+        for (final String orderId in vanished) {
+          await _detectVanishedOrder(orderId);
+        }
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      _pollInFlight = false;
+    }
     if (_categoriesList.isEmpty && mounted) setState(() => _categoriesList = _categoriesFallback);
+  }
+
+  /// Kapag nawala ang order sa `/unfinished`, malamang na-settle na ito.
+  /// Kunin ang final status para makapag-notify at makapag-pop-up nang tama.
+  Future<void> _detectVanishedOrder(String orderId) async {
+    try {
+      final response =
+          await http.get(Uri.parse('$_baseUrl/api/v1/orders/$orderId')).timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) {
+        _polledOrderStatuses.remove(orderId);
+        return;
+      }
+      final dynamic decoded = jsonDecode(response.body);
+      final dynamic rawOrder = decoded is Map
+          ? (decoded['data']?['order'] ?? decoded['data'] ?? decoded['order'])
+          : null;
+      if (rawOrder is! Map) {
+        _polledOrderStatuses.remove(orderId);
+        return;
+      }
+      final String finalStatus =
+          (rawOrder['order_status'] ?? rawOrder['status'] ?? '').toString().toUpperCase();
+      final String previousStatus = _polledOrderStatuses[orderId] ?? '';
+      if (finalStatus.isNotEmpty && finalStatus != previousStatus) {
+        OrderEventRouter.instance.onStatusObserved(
+          status: finalStatus,
+          orderId: rawOrder['order_id'] ?? rawOrder['id'] ?? orderId,
+          reason: rawOrder['decline_reason']?.toString() ?? rawOrder['reason']?.toString(),
+          parentOrderId: rawOrder['parent_order_id'],
+          eventType: 'poll',
+        );
+      }
+      _polledOrderStatuses[orderId] = finalStatus;
+    } catch (_) {
+      _polledOrderStatuses.remove(orderId);
+    }
   }
 
   Future<void> _fetchLiveDatabaseMenu() async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/api/v1/customer/menu'));
+      final response = await http.get(Uri.parse('$_baseUrl/api/v1/customer/menu')).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final Map<String, dynamic> decodedData = jsonDecode(response.body);
         final List menuList = decodedData['data'] ?? [];
@@ -989,6 +1099,8 @@ class _MenuScreenState extends State<MenuScreen> {
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: () async {
+                  if (!await _ensureOrderingNotLocked()) return;
+                  if (!mounted) return;
                   final updatedCart = await Navigator.push<Map<FoodItem, int>>(
                     context,
                     MaterialPageRoute(
@@ -1026,15 +1138,18 @@ class _MenuScreenState extends State<MenuScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _buildNavItem(Icons.restaurant, 'Menu', isActive: true, onTap: () {}),
-              _buildNavItem(Icons.shopping_bag_outlined, 'Cart', onTap: () {
+              _buildNavItem(Icons.shopping_bag_outlined, 'Cart', onTap: () async {
+                if (!await _ensureOrderingNotLocked()) return;
+                if (!mounted) return;
                 Navigator.push(context, MaterialPageRoute(builder: (context) => ShoppingCartScreen(cart: _orderCart, total: _cartGrandTotal, tableId: _chosenTableNumber, isTakeout: _isTakeoutSelected, isAdditionalOrder: widget.isAdditionalOrder)));
               }),
               _buildNavItem(Icons.track_changes, 'Live Status', onTap: () {
                 final dynamic activeLiveOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
                 Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: activeLiveOrderId, isTakeout: _isTakeoutSelected, tableId: _chosenTableNumber, isAdditionalOrder: widget.isAdditionalOrder)));
               }),
-              _buildNavItem(Icons.account_balance_wallet_outlined, 'Pay', onTap: () {
-                Navigator.push(context, MaterialPageRoute(builder: (context) => SessionBillScreen(tableId: _chosenTableNumber, isTakeout: _isTakeoutSelected)));
+              _buildNavItem(Icons.account_balance_wallet_outlined, 'Bill', onTap: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (context) => SessionBillScreen(tableId: _chosenTableNumber, isTakeout: _isTakeoutSelected)));
+                if (mounted) _fetchBillLockState();
               }),
             ],
           ),

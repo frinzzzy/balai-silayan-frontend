@@ -7,7 +7,6 @@ import 'dart:convert';
 import '../../menu_screen.dart' as root_menu;
 import '../../checkout_screen.dart';
 import '../../assistance_screen.dart';
-import '../../orders_screen.dart';
 import '../../order_status_screen.dart';
 import '../../shopping_cart_screen.dart';
 import '../../food_details_screen.dart';
@@ -185,7 +184,14 @@ class _MenuScreenState extends State<MenuScreen> {
   bool _isLoading = true;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _tableScrollController = ScrollController();
   String get _baseUrl => ApiConfig.baseUrl;
+
+  @override
+  void dispose() {
+    _tableScrollController.dispose();
+    super.dispose();
+  }
 
   root_menu.FoodItem _toRootFoodItem(FoodItem item) {
     return root_menu.FoodItem(
@@ -1202,8 +1208,10 @@ class _MenuScreenState extends State<MenuScreen> {
                         },
                       ),
                       child: Scrollbar(
+                        controller: _tableScrollController,
                         thumbVisibility: true,
                         child: ListView.builder(
+                          controller: _tableScrollController,
                           scrollDirection: Axis.horizontal,
                           padding: const EdgeInsets.only(bottom: 8),
                           itemCount: tableStatuses.isNotEmpty
@@ -2185,7 +2193,7 @@ class _MenuScreenState extends State<MenuScreen> {
                     context,
                     MaterialPageRoute(
                       builder: (context) => OrderStatusScreen(
-                        orderId: 1042,
+                        orderId: UserSession.activeOrderId,
                         isTakeout: _isTakeoutSelected,
                         tableId: _chosenTableNumber,
                       ),

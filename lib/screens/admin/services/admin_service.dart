@@ -7,6 +7,7 @@ import '../../../config/api_config.dart';
 class AdminService {
   final String _baseUrl = ApiConfig.baseUrl;
   static String? staffAuthToken;
+  static String? staffName;
 
   Map<String, String> get _authHeaders {
     final token = staffAuthToken;
@@ -47,7 +48,7 @@ class AdminService {
       final response = await http.get(
         Uri.parse('$_baseUrl/api/v1/orders?all=true'),
         headers: _authHeaders,
-      );
+      ).timeout(const Duration(seconds: 15));
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         final List list = decoded['data'] ?? [];
@@ -79,7 +80,7 @@ class AdminService {
       final response = await http.get(
         Uri.parse(url),
         headers: _authHeaders,
-      );
+      ).timeout(const Duration(seconds: 15));
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         final data = decoded['data'] ?? decoded;
@@ -100,7 +101,7 @@ class AdminService {
       final response = await http.get(
         Uri.parse(url),
         headers: _authHeaders,
-      );
+      ).timeout(const Duration(seconds: 15));
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         final data = decoded['data'] ?? decoded;
@@ -157,10 +158,34 @@ class AdminService {
         Uri.parse('$_baseUrl/api/v1/orders/$orderId/status'),
         headers: _authHeaders,
         body: jsonEncode(body),
-      );
+      ).timeout(const Duration(seconds: 15));
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
       debugPrint('Error updating order status via API: $e');
+    }
+    return false;
+  }
+
+  /// POST /api/v1/orders/:id/bill/reopen
+  /// Binubuksan muli ang ordering para sa isang ticket na nag-request na ng bill.
+  Future<bool> reopenOrderBill({
+    required int orderId,
+    bool isApiConnected = false,
+  }) async {
+    if (!isApiConnected) {
+      await Future.delayed(const Duration(milliseconds: 150));
+      return true;
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/api/v1/orders/$orderId/bill/reopen'),
+        headers: _authHeaders,
+        body: jsonEncode(<String, dynamic>{}),
+      ).timeout(const Duration(seconds: 15));
+      return response.statusCode == 200 || response.statusCode == 201;
+    } catch (e) {
+      debugPrint('Error reopening order bill via API: $e');
     }
     return false;
   }
@@ -186,7 +211,7 @@ class AdminService {
           "amount_paid": amountPaid > 0 ? amountPaid : 1000.0,
           "discount_type": "NONE"
         }),
-      );
+      ).timeout(const Duration(seconds: 30));
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
       debugPrint('Error processing payment via API: $e');
@@ -200,7 +225,7 @@ class AdminService {
       final response = await http.get(
         Uri.parse('$_baseUrl/api/v1/menu'),
         headers: _authHeaders,
-      );
+      ).timeout(const Duration(seconds: 15));
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         final List list = decoded['data'] ?? decoded['items'] ?? [];
@@ -222,7 +247,7 @@ class AdminService {
           "stock_quantity": stockQuantity,
           "adjustment_type": adjustmentType,
         }),
-      );
+      ).timeout(const Duration(seconds: 15));
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
       debugPrint('Error updating item stock: $e');
