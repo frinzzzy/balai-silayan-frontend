@@ -601,7 +601,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           _buildNavItem(Icons.restaurant, 'Menu', onTap: () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen()));
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')));
           }),
           _buildNavItem(Icons.track_changes, 'Live Status', onTap: () {
             Navigator.push(

@@ -6,6 +6,7 @@ import '../models/user_session.dart';
 import '../config/api_config.dart';
 import 'audio_notification_service.dart';
 import 'fcm_service.dart';
+import 'order_context.dart';
 import 'order_event_router.dart';
 import 'order_event_bus.dart';
 import 'supabase_realtime_service.dart';
@@ -461,6 +462,10 @@ class GlobalOrderRouteObserver extends NavigatorObserver {
       GlobalSocketListener.instance.setOnOrderStatusChanged(GlobalSocketListener.instance.defaultOrderStatusRefresh);
       GlobalSocketListener.instance.setOnSessionClosed(GlobalSocketListener.instance.defaultOrderSessionClosed);
       GlobalSocketListener.instance.setOnBillRequested(null);
+      // Ibalik din ang order context ng MenuScreen. Kung hindi, nagiging
+      // `idle` ang mode pagka-pop ng OrderStatusScreen/cart at hindi na
+      // lumalabas ang finished/declined pop-up para sa additional order.
+      OrderContext.instance.restoreFromSession();
     }
   }
 }

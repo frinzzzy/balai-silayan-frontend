@@ -1,3 +1,5 @@
+import '../user_session.dart';
+
 /// Isang source of truth para sa "ano ang ginagawa ng customer ngayon".
 ///
 /// Dati ay mahilig mag-overload ang `UserSession.targetParentOrderId` (minsan
@@ -85,6 +87,31 @@ class OrderContext {
     _linkedParentId = null;
     _viewingOrderId = null;
     _viewedParentId = null;
+  }
+
+  /// Ibinabalik ang context ng aktibong order flow mula sa `UserSession`.
+  ///
+  /// Ginagamit kapag bumalik ang customer sa MenuScreen mula sa isang pushed
+  /// screen (hal. OrderStatusScreen/Cart). Kung hindi ito gawin, nagle-leave
+  /// ang pushed screen at nagiging `idle` ang mode — kaya hindi na lumalabas
+  /// ang finished/declined pop-up kahit nasa additional-order flow pa rin.
+  void restoreFromSession() {
+    if (UserSession.isAdditionalOrder) {
+      enter(
+        mode: CustomerOrderMode.additionalOrder,
+        activeOrderId: UserSession.lastPlacedOrderId,
+        linkedParentId: UserSession.targetParentOrderId,
+      );
+      return;
+    }
+    if (UserSession.lastPlacedOrderId != null) {
+      enter(
+        mode: CustomerOrderMode.newOrder,
+        activeOrderId: UserSession.lastPlacedOrderId,
+      );
+      return;
+    }
+    reset();
   }
 
   /// Full reset (hal. bagong QR scan / session closed).

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../user_session.dart';
@@ -12,8 +14,9 @@ import 'order_event_bus.dart';
 /// Responsibility:
 /// 1. Palaging mag-banner (table/session scoped na ang filtering bago pa
 ///    makarating dito).
-/// 2. Mag-pop-up ng "Finished Order" LANG kung ang na-finish na ticket ay
-///    konektado sa kasalukuyang ginagawa/tinitingnan ng customer.
+/// 2. Mag-pop-up ng "Finished Order" o "Order Declined" LANG kung ang
+///    na-update na ticket ay konektado sa kasalukuyang ginagawa/tinitingnan
+///    ng customer.
 /// 3. I-broadcast ang refresh sa mga screen (walang single handler slot).
 class OrderEventRouter {
   OrderEventRouter._();
@@ -25,6 +28,12 @@ class OrderEventRouter {
     'PAID',
     'CLOSED',
     'SETTLED',
+  };
+
+  static const Set<String> _declinedStatuses = <String>{
+    'DECLINED',
+    'REJECTED',
+    'CANCELLED',
   };
 
   /// Mula sa socket payload.
@@ -86,6 +95,16 @@ class OrderEventRouter {
     );
   }
 
+  /// Kapag pumasok ang customer sa additional-order flow, i-reset ang popup
+  /// dedupe ng parent at ng sariling order para hindi barado ng lumang key
+  /// ang susunod na update (hal. kapag nag-test ulit sa parehong ticket).
+  void resetPopupDedupe(dynamic orderId) {
+    final String id = _normalizeId(orderId);
+    if (id.isEmpty) return;
+    NotificationCenter.instance.forget('finished_dialog|$id');
+    NotificationCenter.instance.forget('declined_dialog|$id');
+  }
+
   void _publish({
     required String status,
     required dynamic orderId,
@@ -115,33 +134,60 @@ class OrderEventRouter {
     }
 
     // 2. Pop-up policy — tanging para sa konektadong ticket.
-    if (_terminalStatuses.contains(normalized)) {
-      if (OrderContext.instance.isTicketRelevant(
-        orderId,
-        eventParentOrderId: parentOrderId,
-      )) {
-        _maybeShowFinishedDialog(displayCode, orderId);
-      }
+    final bool isRelevant = OrderContext.instance.isTicketRelevant(
+      orderId,
+      eventParentOrderId: parentOrderId,
+    );
+
+    if (isRelevant && _terminalStatuses.contains(normalized)) {
+      unawaited(_maybeShowOutcomeDialog(
+        orderCode: displayCode,
+        orderId: orderId,
+        outcome: OrderOutcome.finished,
+        reason: reason,
+      ));
+    } else if (isRelevant && _declinedStatuses.contains(normalized)) {
+      unawaited(_maybeShowOutcomeDialog(
+        orderCode: displayCode,
+        orderId: orderId,
+        outcome: OrderOutcome.declined,
+        reason: reason,
+      ));
     }
 
     // 3. Refresh broadcast.
     OrderEventBus.instance.notifyRefresh();
   }
 
-  void _maybeShowFinishedDialog(String orderCode, dynamic orderId) {
-    final String key = 'finished_dialog|${_normalizeId(orderId)}';
-    // Isang beses lang per ticket sa loob ng 30 minuto.
-    if (!NotificationCenter.instance.shouldNotify(
-      key,
-      ttl: const Duration(minutes: 30),
-    )) {
+  Future<void> _maybeShowOutcomeDialog({
+    required String orderCode,
+    required dynamic orderId,
+    required OrderOutcome outcome,
+    required String reason,
+  }) async {
+    final String normalizedId = _normalizeId(orderId);
+    final bool isDeclined = outcome == OrderOutcome.declined;
+    final String key = isDeclined
+        ? 'declined_dialog|$normalizedId'
+        : 'finished_dialog|$normalizedId';
+    final Duration ttl = isDeclined
+        ? const Duration(minutes: 2)
+        : const Duration(minutes: 30);
+
+    if (!NotificationCenter.instance.shouldNotify(key, ttl: ttl)) {
       return;
     }
 
-    FinishedOrderDialog.show(
+    final bool shown = await FinishedOrderDialog.show(
       orderCode: orderCode,
-      orderId: _normalizeId(orderId),
+      orderId: normalizedId,
+      outcome: outcome,
+      reason: reason,
     );
+
+    // Kung hindi pa ready ang navigator/dialog, huwag sayangin ang dedupe key
+    // para may chance pang lumabas sa susunod na event/poll.
+    if (!shown) NotificationCenter.instance.forget(key);
   }
 
   String _normalizeId(dynamic id) {

@@ -4,11 +4,9 @@ import 'dart:convert';
 import 'menu_screen.dart';
 import 'checkout_screen.dart';
 import 'assistance_screen.dart';
-import 'order_type_selection_screen.dart';
 import 'user_session.dart';
 import 'config/api_config.dart';
 import 'services/global_socket_listener.dart';
-import '../widgets/finished_order_dialog.dart';
 
 class ShoppingCartScreen extends StatefulWidget {
   final Map<FoodItem, int> cart;
@@ -36,7 +34,6 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   bool _isLoadingParentItems = false;
   List<dynamic> _sessionOrdersSummary = [];
   double _sessionGrandTotal = 0.0;
-  bool _dialogShown = false;
 
   String get _baseUrl => ApiConfig.baseUrl;
 
@@ -58,148 +55,17 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     // Phase D: single socket na ang gamitin ng lahat ng screens - ang
     // GlobalSocketListener na. Hindi na gumagamit ng ibang socket connection
     // ang cart para hindi mabubuo ang duplicate order-event handlers.
+    //
+    // ⚠️ Huwag i-override ang fallback order/session handlers ng MenuScreen.
+    // Ang finished/declined pop-ups ay hawak na ng OrderEventRouter; kung
+    // magse-set pa rin ang cart ng sariling handler, nasasapawan nito ang menu
+    // at nagkakaroon ng duplicate/maling scoping (dati: lastPlacedOrderId ang
+    // ginagamit kaya na-i-ignore ang parent ticket sa additional order).
     GlobalSocketListener.instance.start(context: context);
     GlobalSocketListener.instance.registerTableIdentity(
       tableId: widget.tableId,
       tableNumber: UserSession.activeTableNumber,
     );
-    GlobalSocketListener.instance.setFallbackOrderEventHandler(_handleTableOrderEvent);
-    GlobalSocketListener.instance.setFallbackOrderSessionClosed(_handleTableOrderFinished);
-  }
-  void _handleTableOrderEvent(dynamic data) {
-    if (!mounted) return;
-    if (data == null) return;
-
-    final Map<String, dynamic> payload = data is Map<String, dynamic> ? data : Map<String, dynamic>.from(data as Map);
-    final Map<String, dynamic> orderPayload = payload['order'] is Map ? Map<String, dynamic>.from(payload['order']) : payload;
-
-    GlobalSocketListener.instance.registerTableIdentity(
-      tableId: widget.tableId,
-      tableNumber: UserSession.activeTableNumber,
-    );
-    if (!GlobalSocketListener.instance.isEventForCurrentTable(orderPayload, payload)) {
-      return;
-    }
-
-    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
-    final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
-    final dynamic currentOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
-
-    if (eventOrderId != null && currentOrderId != null) {
-      final String targetStr = currentOrderId.toString().replaceAll('#BS-', '').trim();
-      final String eventStr = eventOrderId.toString().replaceAll('#BS-', '').trim();
-      final int? targetInt = int.tryParse(targetStr);
-      final int? eventInt = int.tryParse(eventStr);
-      bool isSame = (targetStr == eventStr) || (targetInt != null && eventInt != null && targetInt == eventInt);
-      if (!isSame) {
-        return;
-      }
-    }
-
-    if (status == 'COMPLETED' || status == 'PAID' || status == 'CLOSED' || status == 'SETTLED') {
-      _handleTableOrderFinished(payload);
-    } else if (status == 'DECLINED' || status == 'REJECTED') {
-      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
-      _showCartOrderDeclinedDialog(reason, orderPayload['order_code'] ?? '#BS-${eventOrderId ?? ""}');
-    }
-  }
-
-  bool _cartDeclinedDialogShown = false;
-
-  void _showCartOrderDeclinedDialog(String declineReason, String orderCode) {
-    if (_cartDeclinedDialogShown || !mounted) return;
-    _cartDeclinedDialogShown = true;
-
-    final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFFFFFDFA),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Order Declined', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444))),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Pasensya na po, ang inyong order ($orderCode) ay na-decline ng kitchen/admin.',
-              style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEE2E2),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFFCA5A5)),
-              ),
-              child: Text(
-                'Reason: $declineReason',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B3B2B)),
-            onPressed: () {
-              Navigator.pop(ctx);
-              // Non-destructive: huwag i-clear ang buong session — may iba pang
-              // active tickets ang table. Bumalik lang sa order choices.
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => OrderTypeSelectionScreen(
-                    tableId: currentTable,
-                    tableNumber: currentTable,
-                  ),
-                ),
-                (route) => false,
-              );
-            },
-            child: const Text('Acknowledge / Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _handleTableOrderFinished(dynamic data) {
-    if (!mounted) return;
-
-    final int currentTable = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-    int? eventTableId;
-    dynamic eventOrderId;
-    if (data is Map) {
-      eventTableId = int.tryParse(data['table_id']?.toString() ?? '');
-      eventOrderId = data['order_id'] ?? data['id'];
-    }
-
-    if (eventTableId != null && eventTableId != currentTable) {
-      return;
-    }
-
-    final dynamic currentOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
-    final String orderCode = data is Map ? (data['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}').trim() : 'Ticket';
-
-    if (eventOrderId != null && currentOrderId != null && eventOrderId.toString() != currentOrderId.toString()) {
-      return;
-    }
-
-    if (_dialogShown) return;
-    _dialogShown = true;
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      FinishedOrderDialog.show(
-        orderCode: orderCode,
-        orderId: UserSession.formatOrderCode(eventOrderId ?? UserSession.lastPlacedOrderId),
-      );
-    });
   }
 
   @override

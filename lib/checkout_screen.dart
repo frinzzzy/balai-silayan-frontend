@@ -598,15 +598,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     if (hasParent) {
       UserSession.isAdditionalOrder = true;
       UserSession.targetParentOrderId = linkedParent;
-      OrderContext.instance.enter(
-        mode: CustomerOrderMode.additionalOrder,
+      // `update` lang (hindi `enter`) para hindi nakawin/ma-reset ang context
+      // na pagmamay-ari ng MenuScreen. Kung `enter` ang gamit at hindi
+      // ini-store ang token, hindi ito nagle-leave at nagiging stale.
+      OrderContext.instance.update(
         activeOrderId: sanitizedOrderId,
         linkedParentId: linkedParent,
       );
     } else {
       UserSession.isAdditionalOrder = false;
-      OrderContext.instance.enter(
-        mode: CustomerOrderMode.newOrder,
+      OrderContext.instance.update(
         activeOrderId: sanitizedOrderId,
       );
     }

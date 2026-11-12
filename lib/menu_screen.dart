@@ -272,6 +272,14 @@ class _MenuScreenState extends State<MenuScreen> {
       activeOrderId: UserSession.lastPlacedOrderId,
       linkedParentId: UserSession.targetParentOrderId,
     );
+
+    // Bagong pasok sa additional-order flow: i-reset ang popup dedupe ng
+    // parent at sariling order para hindi barado ng lumang key ang susunod
+    // na finished/declined update.
+    if (widget.isAdditionalOrder || UserSession.isAdditionalOrder) {
+      OrderEventRouter.instance.resetPopupDedupe(UserSession.targetParentOrderId);
+      OrderEventRouter.instance.resetPopupDedupe(UserSession.lastPlacedOrderId);
+    }
   }
 
   bool _isCurrentTicketBillLocked() {
@@ -370,127 +378,26 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   void _handleTableOrderEvent(dynamic data) {
-    if (!mounted) return;
-    if (data == null) return;
-
-    final Map<String, dynamic> payload = data is Map<String, dynamic> ? data : Map<String, dynamic>.from(data as Map);
-    final Map<String, dynamic> orderPayload = payload['order'] is Map ? Map<String, dynamic>.from(payload['order']) : payload;
-
-    final int? eventSessionId = int.tryParse(orderPayload['session_id']?.toString() ?? payload['session_id']?.toString() ?? '');
-    final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? payload['order_id'] ?? payload['id'];
-
-    // Itakda muna ang table identity ng screen na ito (PK at display number)
-    // para tama ang comparison kahit magkaiba ang format na dala ng payload.
+    // LAHAT ng finished/declined pop-ups ay hawak na ng OrderEventRouter
+    // (socket at polling) ayon sa OrderContext. Keep this as a lightweight
+    // fallback handler para may ma-restore ang route observer pagbalik sa menu.
+    if (!mounted || data == null) return;
+    final Map<String, dynamic> payload = data is Map<String, dynamic>
+        ? data
+        : Map<String, dynamic>.from(data as Map);
+    final Map<String, dynamic> orderPayload = payload['order'] is Map
+        ? Map<String, dynamic>.from(payload['order'])
+        : payload;
     GlobalSocketListener.instance.registerTableIdentity(
       tableId: widget.tableId,
       tableNumber: widget.tableNumber ?? _chosenTableNumber,
     );
-
-    // 1. STRICT EVENT FILTERING
-    if (!GlobalSocketListener.instance.isEventForCurrentTable(orderPayload, payload)) {
-      return; // Ibang table/session, ignore
+    if (!GlobalSocketListener.instance.isEventForCurrentTable(
+      orderPayload,
+      payload,
+    )) {
+      return;
     }
-    if (eventSessionId != null) {
-      final int? currentSessionId = UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
-      final int? eventTableFromPayload = int.tryParse(orderPayload['table_id']?.toString() ?? payload['table_id']?.toString() ?? '');
-      // Session scoping lang ang gamitin kapag walang table info sa payload.
-      if (eventTableFromPayload == null && currentSessionId != null && eventSessionId != currentSessionId) {
-        return;
-      }
-    } else if (eventOrderId == null) {
-      return; // Wala kahit isang identifier, ignore
-    }
-
-    final String status = (orderPayload['status'] ?? orderPayload['order_status'] ?? payload['status'] ?? payload['order_status'] ?? '').toString().toUpperCase();
-    final String orderCode = eventOrderId != null ? UserSession.formatOrderCode(eventOrderId) : (orderPayload['order_code']?.toString() ?? '#BS-${eventOrderId ?? ""}');
-
-    // 2. NOTIFICATIONS ay central na (GlobalSocketListener -> NotificationCenter).
-    // Dito na lang ang UI-specific pop-ups (dialogs).
-
-    // 3. INTERNAL POP-UPS (THE SPOKE)
-    // Terminal (COMPLETED/PAID/CLOSED/SETTLED) pop-ups ay hawak na ng
-    // OrderEventRouter ayon sa OrderContext. Dito na lang ang decline dialog,
-    // na screen-specific at may reason payload.
-    final dynamic currentTrackedOrderId = (widget.isAdditionalOrder || UserSession.isAdditionalOrder)
-        ? UserSession.targetParentOrderId
-        : UserSession.lastPlacedOrderId;
-
-    bool shouldShowPopup = true;
-    if (eventOrderId != null && currentTrackedOrderId != null) {
-      if (!SocketService.isSameOrder(eventOrderId, currentTrackedOrderId)) {
-        shouldShowPopup = false; // Mismatched specific order ID, skip intrusive dialog
-      }
-    }
-
-    if (shouldShowPopup &&
-        (status == 'DECLINED' || status == 'REJECTED' || status == 'CANCELLED')) {
-      final String reason = (orderPayload['decline_reason'] ?? orderPayload['reason'] ?? payload['decline_reason'] ?? payload['reason'] ?? 'Item Out of Stock').toString();
-      Future.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) _showOrderDeclinedDialog(orderCode, reason);
-      });
-    }
-  }
-
-  bool _declineDialogShown = false;
-
-  void _showOrderDeclinedDialog(String orderCode, String reason) {
-    if (_declineDialogShown || !mounted) return;
-    _declineDialogShown = true;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFFFFFDFA),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Order Declined', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444))),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Pasensya na po, ang inyong order ($orderCode) ay na-decline ng kitchen/admin.',
-              style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEE2E2),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFFCA5A5)),
-              ),
-              child: Text(
-                'Reason: ${reason.isNotEmpty ? reason : "Item Out of Stock"}',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B3B2B)),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _declineDialogShown = false;
-              // Babalik lamang sa choices
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => OrderTypeSelectionScreen(
-                    tableId: _chosenTableNumber ?? 7,
-                    tableNumber: _chosenTableNumber ?? 7,
-                  ),
-                ),
-                (route) => false,
-            );
-            },
-            child: const Text('Acknowledge / Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
   }
 
   void _handleTableOrderFinished(dynamic eventPayloadData) {

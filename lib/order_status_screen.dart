@@ -366,7 +366,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
 
   bool _dialogShown = false;
   bool _hasTriggeredCompletion = false;
-  bool _declineDialogShown = false;
 
   void _showSessionFinishedDialog(String orderCode) {
     if (_dialogShown || _hasTriggeredCompletion || !mounted) return;
@@ -381,58 +380,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           orderId: UserSession.formatOrderCode(
             widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId,
           ),
-        ),
-      );
-    });
-  }
-
-  void _showOrderDeclinedDialog(String declineReason) {
-    if (_declineDialogShown || !mounted) return;
-    _declineDialogShown = true;
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFFFFFDFA),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-          title: const Text('Order Declined', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444))),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Pasensya na po, ang inyong order (${_fetchedOrderCode.isNotEmpty ? _fetchedOrderCode : UserSession.formatOrderCode(widget.orderId ?? UserSession.lastPlacedOrderId)}) ay na-decline ng kitchen/admin.',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
-              ),
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.all(12),
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEE2E2),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFFCA5A5)),
-                ),
-                child: Text(
-                  'Reason: ${declineReason.isNotEmpty ? declineReason : "Item Out of Stock"}',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B3B2B)),
-              onPressed: () {
-                Navigator.pop(ctx);
-                _navigateToMenu();
-              },
-              child: const Text('Acknowledge / Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ],
         ),
       );
     });
@@ -493,9 +440,8 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       case 'DECLINED':
         _statusBadgeLabel = 'Order Declined';
         _stepperProgressIndex = 0;
-        if (isStatusTransition) {
-          _showOrderDeclinedDialog(_declineReason.isNotEmpty ? _declineReason : 'Item Out of Stock');
-        }
+        // Pop-up ay hawak na ng OrderEventRouter (via onStatusObserved sa
+        // itaas) para pareho ang behavior sa socket at polling at walang doble.
         break;
       case 'CANCELLED':
       case 'SESSION_CANCELLED':
