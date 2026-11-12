@@ -123,9 +123,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (!silent && _orders.isEmpty) {
       setState(() => _isLoading = true);
     }
-    final orders = await _adminService.fetchOrdersQueue(
+    final List<AdminOrder>? orders = await _adminService.fetchOrdersQueue(
       isApiConnected: _isApiConnected,
     );
+    if (!mounted) return;
+
+    // Bigo ang fetch (timeout/cold start/non-200). HUWAG i-seed ang order ids
+    // at huwag i-overwrite ang existing data — kung hindi, sa susunod na poll
+    // paputok lahat ng lumang bill banners dahil akala'y bagong orders sila.
+    if (orders == null) {
+      if (!silent) setState(() => _isLoading = false);
+      return;
+    }
+
     final stats = await _adminService.fetchDailySalesAnalytics(
       isApiConnected: _isApiConnected,
     );

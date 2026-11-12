@@ -463,9 +463,38 @@ class AudioNotificationService {
       parentOrderId: parentOrderId,
       billRequestedAt: billRequestedAt,
     );
-    NotificationCenter.instance.shouldNotify(
+    // Kung na-seed/naka-alert na ito, huwag nang magdagdag ng history record.
+    if (!NotificationCenter.instance.shouldNotify(
       dedupeKey,
       ttl: const Duration(hours: 24),
+    )) {
+      return;
+    }
+
+    final int? rootOrderId = parentOrderId != null && parentOrderId > 0
+        ? parentOrderId
+        : orderId;
+    final String ticketCode = rootOrderId != null && rootOrderId > 0
+        ? UserSession.formatOrderCode(rootOrderId)
+        : (orderId != null && orderId > 0
+              ? UserSession.formatOrderCode(orderId)
+              : 'BILL');
+    final String groupKey = rootOrderId != null && rootOrderId > 0
+        ? UserSession.formatOrderCode(rootOrderId)
+        : 'BILL-TABLE-${tableNumber.toString().padLeft(2, '0')}';
+
+    // Walang banner at tunog — record lang para may laman agad ang bell/history
+    // pagka-login ng admin, kahit hindi pa nag-po-poll ang bagong order.
+    _insertOrUpdateRecord(
+      NotificationRecord(
+        title:
+            'Bill Requested — $ticketCode • Table ${tableNumber.toString().padLeft(2, '0')}',
+        message: 'Existing bill request. Waiting for staff to settle.',
+        timestamp: billRequestedAt ?? DateTime.now(),
+        backgroundColor: const Color(0xFF0EA5E9),
+        icon: Icons.receipt_long,
+        groupKey: groupKey,
+      ),
     );
   }
 

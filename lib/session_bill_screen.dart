@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show ImageFilter;
 
@@ -84,6 +85,7 @@ class SessionBillScreen extends StatefulWidget {
 class _SessionBillScreenState extends State<SessionBillScreen> {
   bool _isLoading = true;
   bool _isRequestingBill = false;
+  bool _isWakingServer = false;
   String? _billRequestedAt;
   String? _errorMessage;
 
@@ -165,20 +167,76 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     });
   }
 
+  /// I-resolve ang table id. Huwag kailanman mag-fallback sa table 1 —
+  /// delikado iyon dahil pwedeng maling bill ang ipakita sa customer.
+  int? _resolveTableId() =>
+      widget.tableId ??
+      UserSession.activeTableId ??
+      UserSession.activeTableNumber;
+
   Future<void> _fetchSessionBillData({bool refresh = false}) async {
-    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 1;
-    final Uri requestUri = Uri.parse('$_baseUrl/api/v1/tables/$tableNum/bill');
+    final int? resolvedTableId = _resolveTableId();
 
     setState(() {
       if (!refresh) _isLoading = true;
       _errorMessage = null;
+      _isWakingServer = false;
     });
 
-    try {
-      final response = await http
-          .get(requestUri, headers: {'Content-Type': 'application/json'})
-          .timeout(const Duration(seconds: 10));
+    if (resolvedTableId == null || resolvedTableId <= 0) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage =
+            'Hindi matukoy ang table. I-scan muli ang QR code ng table.';
+      });
+      return;
+    }
 
+    final Uri requestUri =
+        Uri.parse('$_baseUrl/api/v1/tables/$resolvedTableId/bill');
+
+    // Render free tier: natutulog ang server pag ~15 min idle at umaabot ng
+    // 30-60s ang wake up. Subukan muli nang mas mahaba bago mag-error.
+    const List<Duration> attemptTimeouts = <Duration>[
+      Duration(seconds: 12),
+      Duration(seconds: 30),
+      Duration(seconds: 45),
+    ];
+
+    http.Response? response;
+    Object? lastError;
+
+    for (int attempt = 0; attempt < attemptTimeouts.length; attempt++) {
+      try {
+        response = await http
+            .get(requestUri, headers: {'Content-Type': 'application/json'})
+            .timeout(attemptTimeouts[attempt]);
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+      }
+
+      if (!mounted) return;
+      if (attempt < attemptTimeouts.length - 1) {
+        setState(() => _isWakingServer = true);
+      }
+    }
+
+    if (response == null) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isWakingServer = false;
+          _errorMessage = lastError is TimeoutException
+              ? 'Masyadong matagal ang server (cold start). Subukan muli.'
+              : 'Could not connect to backend endpoint.';
+        });
+      }
+      return;
+    }
+
+    try {
       if (response.statusCode == 200) {
         final resData = jsonDecode(response.body);
         final data = resData['data'];
@@ -294,6 +352,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             _billRequestedAt =
                 allTicketsRequested ? requestedAt?.toString() : null;
             _isLoading = false;
+            _isWakingServer = false;
           });
 
           // Kalkulahin ang kabuuang halaga batay sa mga napiling tickets
@@ -303,14 +362,16 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
       }
 
       setState(() {
-        _errorMessage = "Failed to load bill (Status: ${response.statusCode})";
+        _errorMessage = "Failed to load bill (Status: ${response!.statusCode})";
         _isLoading = false;
+        _isWakingServer = false;
       });
     } catch (e) {
       if (mounted) {
         setState(() {
           _errorMessage = "Could not connect to backend endpoint.";
           _isLoading = false;
+          _isWakingServer = false;
         });
       }
     }
@@ -468,8 +529,12 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   Future<void> _submitRequestBill() async {
     if (_isRequestingBill) return;
 
-    final int tableNum =
-        widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 1;
+    final int? resolvedTableId = _resolveTableId();
+    if (resolvedTableId == null || resolvedTableId <= 0) {
+      _showSnack('Hindi matukoy ang table. I-scan muli ang QR code ng table.');
+      return;
+    }
+    final int tableNum = resolvedTableId;
     final int? sessionId =
         UserSession.activeSessionId ?? int.tryParse(UserSession.sessionId ?? '');
     final String? token = UserSession.activeSessionToken;
@@ -641,10 +706,12 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
+    final int tableNum = _resolveTableId() ?? 0;
     final String tableString = widget.isTakeout
         ? 'Takeout'
-        : 'Table ${tableNum.toString().padLeft(2, '0')}';
+        : tableNum > 0
+            ? 'Table ${tableNum.toString().padLeft(2, '0')}'
+            : 'Table --';
     final bool hasSelectedOrders = _sessionOrders.any(
         (order) => order['isSelected'] == true && order['isRequested'] != true);
 
@@ -657,9 +724,26 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
             _buildTableContextStrip(tableString),
             Expanded(
               child: _isLoading
-                  ? const Center(
-                child: CircularProgressIndicator(
-                  color: Color(0xFF203F35),
+                  ? Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(
+                      color: Color(0xFF203F35),
+                    ),
+                    if (_isWakingServer) ...[
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Waking up server…\nPlease wait, this can take up to a minute.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF788078),
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               )
                   : _errorMessage != null
@@ -686,19 +770,6 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                           ),
                         ),
                       )
-                    else if (!_sessionOrders.any(
-                      (order) => order['isRequested'] != true,
-                    ))
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 40),
-                        child: Center(
-                          child: Text(
-                            "All orders have been requested for billing. Waiting for staff.",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Color(0xFF788078)),
-                          ),
-                        ),
-                      )
                     else ...[
                       if (_sessionOrders.any(
                             (order) => order['isRequested'] == true,
@@ -717,21 +788,26 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                               border: Border.all(color: const Color(0xFFDDE5DB)),
                             ),
                             child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Icon(
-                                  Icons.receipt_long,
-                                  size: 16,
-                                  color: Color(0xFF788078),
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 1),
+                                  child: Icon(
+                                    Icons.receipt_long,
+                                    size: 16,
+                                    color: Color(0xFF53766C),
+                                  ),
                                 ),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
                                     '${_sessionOrders.where((order) => order['isRequested'] == true).length} '
                                     'ticket(s) already requested for billing. '
-                                    'They will reappear once staff reopens the bill.',
+                                    'Naka-read-only na ito at hindi mawawala sa listahan '
+                                    'habang hinihintay ang staff.',
                                     style: const TextStyle(
                                       fontSize: 11,
-                                      color: Color(0xFF788078),
+                                      color: Color(0xFF53766C),
                                       height: 1.35,
                                     ),
                                   ),
@@ -740,9 +816,10 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                             ),
                           ),
                         ),
-                      ..._sessionOrders.asMap().entries
-                          .where((entry) => entry.value['isRequested'] != true)
-                          .map(
+                      // Ipakita LAHAT ng tickets — kasama ang requested — para
+                      // hindi maguluhan ang customer. Naka-lock lang ang
+                      // requested tickets sa card (read-only).
+                      ..._sessionOrders.asMap().entries.map(
                             (entry) => _buildBilledOrderCard(
                               entry.value,
                               entry.key,
@@ -1180,6 +1257,9 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   }
 
   Widget _buildPriceBreakdownCard() {
+    final BillTotals requestedTotals = computeBillTotals(
+      _sessionOrders.where((order) => order['isRequested'] == true),
+    );
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -1231,6 +1311,26 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
               ),
             ],
           ),
+          if (requestedTotals.grand > 0) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Already requested (read-only)',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF53766C)),
+                ),
+                Text(
+                  '₱${requestedTotals.grand.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF53766C),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 12.0),
             child: Divider(height: 1, color: Color(0xFFE5DFD3)),

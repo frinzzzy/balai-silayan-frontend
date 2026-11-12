@@ -19,7 +19,9 @@ class AdminService {
   }
 
   /// GET /api/v1/orders?all=true
-  Future<List<AdminOrder>> fetchOrdersQueue({bool isApiConnected = false}) async {
+  /// Returns `null` kapag bigo ang fetch (timeout, cold start, non-200) para
+  /// hindi mapagkamalang "empty queue" at hindi mag-trigger ng maling seeding.
+  Future<List<AdminOrder>?> fetchOrdersQueue({bool isApiConnected = false}) async {
     if (!isApiConnected) {
       await Future.delayed(const Duration(milliseconds: 300));
       return [
@@ -57,7 +59,7 @@ class AdminService {
     } catch (e) {
       debugPrint('Error fetching orders queue from API: $e');
     }
-    return [];
+    return null;
   }
 
   /// GET /api/v1/reports/daily-sales
