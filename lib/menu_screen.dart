@@ -8,6 +8,7 @@ import 'food_details_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'session_bill_screen.dart';
 import 'user_session.dart';
+import '../widgets/customer_bottom_nav.dart';
 import '../widgets/finished_order_dialog.dart';
 import 'services/audio_notification_service.dart';
 import 'services/global_socket_listener.dart';
@@ -254,6 +255,10 @@ class _MenuScreenState extends State<MenuScreen> {
     _startHeartbeatTimer();
     _startStatusPollTimer();
     GlobalSocketListener.instance.start(context: context);
+    // Cart tab mula sa Bill/Live Status: dito bubuksan ang cart para hindi
+    // mawala ang kasalukuyang _orderCart ng Menu.
+    MenuCartIntent.openCart.addListener(_handleOpenCartIntent);
+    _handleOpenCartIntent();
     // I-set natin ang MenuScreen bilang ang default order handler. Ang mga
     // pushed screens (ex: OrderStatusScreen) ay nag-override nito habang naka-istante,
     // at ibabalik ang default kapag may nag-pop na naglalayong magreveal ng MenuScreen.
@@ -348,6 +353,39 @@ class _MenuScreenState extends State<MenuScreen> {
     } catch (_) {
       // Best-effort lang: hindi dapat harangin ang menu kung offline.
     }
+  }
+
+  Future<void> _openCartScreen() async {
+    if (!await _ensureOrderingNotLocked()) return;
+    if (!mounted) return;
+    final updatedCart = await Navigator.push<Map<FoodItem, int>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ShoppingCartScreen(
+          cart: _orderCart,
+          total: _cartGrandTotal,
+          tableId: _chosenTableNumber,
+          isTakeout: _isTakeoutSelected,
+          isAdditionalOrder: widget.isAdditionalOrder,
+        ),
+      ),
+    );
+
+    if (updatedCart != null && mounted) {
+      setState(() {
+        _orderCart.clear();
+        _orderCart.addAll(updatedCart);
+      });
+    }
+  }
+
+  void _handleOpenCartIntent() {
+    if (!MenuCartIntent.openCart.value) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!MenuCartIntent.consume()) return;
+      _openCartScreen();
+    });
   }
 
   Future<bool> _ensureOrderingNotLocked() async {
@@ -484,6 +522,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
   @override
   void dispose() {
+    MenuCartIntent.openCart.removeListener(_handleOpenCartIntent);
     _heartbeatTimer?.cancel();
     _statusPollTimer?.cancel();
     if (_refreshToken != null) {
@@ -714,8 +753,12 @@ class _MenuScreenState extends State<MenuScreen> {
         children: [
           InkWell(
             onTap: () {
-              Navigator.pushReplacement(
-                context,
+              final NavigatorState nav = Navigator.of(context);
+              if (nav.canPop()) {
+                nav.pop();
+                return;
+              }
+              nav.pushReplacement(
                 MaterialPageRoute(
                   builder: (context) => OrderTypeSelectionScreen(
                     tableNumber: _chosenTableNumber ?? 7,
@@ -1031,29 +1074,7 @@ class _MenuScreenState extends State<MenuScreen> {
               height: 48,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                onPressed: () async {
-                  if (!await _ensureOrderingNotLocked()) return;
-                  if (!mounted) return;
-                  final updatedCart = await Navigator.push<Map<FoodItem, int>>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ShoppingCartScreen(
-                        cart: _orderCart,
-                        total: _cartGrandTotal,
-                        tableId: _chosenTableNumber,
-                        isTakeout: _isTakeoutSelected,
-                        isAdditionalOrder: widget.isAdditionalOrder,
-                      ),
-                    ),
-                  );
-
-                  if (updatedCart != null && mounted) {
-                    setState(() {
-                      _orderCart.clear();
-                      _orderCart.addAll(updatedCart);
-                    });
-                  }
-                },
+                onPressed: _openCartScreen,
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -1064,48 +1085,20 @@ class _MenuScreenState extends State<MenuScreen> {
               ),
             ),
           ),
-        Container(
-          height: 70,
-          decoration: const BoxDecoration(color: Color(0xFFFFFDFA), border: Border(top: BorderSide(color: Color(0xFFE5DFD3)))),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildNavItem(Icons.restaurant, 'Menu', isActive: true, onTap: () {}),
-              _buildNavItem(Icons.shopping_bag_outlined, 'Cart', onTap: () async {
-                if (!await _ensureOrderingNotLocked()) return;
-                if (!mounted) return;
-                Navigator.push(context, MaterialPageRoute(builder: (context) => ShoppingCartScreen(cart: _orderCart, total: _cartGrandTotal, tableId: _chosenTableNumber, isTakeout: _isTakeoutSelected, isAdditionalOrder: widget.isAdditionalOrder)));
-              }),
-              _buildNavItem(Icons.track_changes, 'Live Status', onTap: () {
-                final dynamic activeLiveOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
-                Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: activeLiveOrderId, isTakeout: _isTakeoutSelected, tableId: _chosenTableNumber, isAdditionalOrder: widget.isAdditionalOrder)));
-              }),
-              _buildNavItem(Icons.account_balance_wallet_outlined, 'Bill', onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(builder: (context) => SessionBillScreen(tableId: _chosenTableNumber, isTakeout: _isTakeoutSelected)));
-                if (mounted) _fetchBillLockState();
-              }),
-            ],
-          ),
+        CustomerBottomNav(
+          activeTab: CustomerNavTab.menu,
+          onMenu: () {},
+          onCart: _openCartScreen,
+          onLiveStatus: () {
+            final dynamic activeLiveOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
+            Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: activeLiveOrderId, isTakeout: _isTakeoutSelected, tableId: _chosenTableNumber, isAdditionalOrder: widget.isAdditionalOrder)));
+          },
+          onBill: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (context) => SessionBillScreen(tableId: _chosenTableNumber, isTakeout: _isTakeoutSelected)));
+            if (mounted) _fetchBillLockState();
+          },
         ),
       ],
-    );
-  }
-
-  Widget _buildNavItem(IconData icon, String label, {bool isActive = false, required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 20, color: isActive ? const Color(0xFF203F35) : const Color(0xFF788078)),
-          const SizedBox(height: 4),
-          Text(label, style: TextStyle(fontSize: 10, fontWeight: isActive ? FontWeight.bold : FontWeight.normal, color: isActive ? const Color(0xFF203F35) : const Color(0xFF788078))),
-          if (isActive) ...[
-            const SizedBox(height: 2),
-            Container(width: 16, height: 2, decoration: BoxDecoration(color: const Color(0xFF203F35), borderRadius: BorderRadius.circular(2))),
-          ],
-        ],
-      ),
     );
   }
 }

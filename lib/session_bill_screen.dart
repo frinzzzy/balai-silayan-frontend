@@ -13,6 +13,7 @@ import 'services/order_context.dart';
 import 'services/order_event_bus.dart';
 import 'bill_requested_screen.dart';
 import 'user_session.dart';
+import '../widgets/customer_bottom_nav.dart';
 import 'config/api_config.dart';
 
 /// Resulta ng total computation para sa customer bill.
@@ -704,6 +705,34 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         : 'Could not request the bill. Please try again.');
   }
 
+  void _goToMenu() {
+    final int tableNum = _resolveTableId() ??
+        UserSession.activeTableId ??
+        UserSession.activeTableNumber ??
+        7;
+    final NavigatorState nav = Navigator.of(context);
+    bool foundMenu = false;
+    nav.popUntil((route) {
+      if (route.settings.name == 'menu') {
+        foundMenu = true;
+        return true;
+      }
+      return route.isFirst;
+    });
+    if (!foundMenu) {
+      nav.push(
+        MaterialPageRoute(
+          builder: (context) => MenuScreen(
+            tableId: tableNum,
+            tableNumber: tableNum,
+            isAdditionalOrder: UserSession.isAdditionalOrder,
+          ),
+          settings: const RouteSettings(name: 'menu'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final int tableNum = _resolveTableId() ?? 0;
@@ -878,7 +907,14 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           InkWell(
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              final NavigatorState nav = Navigator.of(context);
+              if (nav.canPop()) {
+                nav.pop();
+              } else {
+                _goToMenu();
+              }
+            },
             borderRadius: BorderRadius.circular(22),
             child: Container(
               width: 44,
@@ -1463,93 +1499,27 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   }
 
   Widget _buildCustomerBottomNav(int tableNum) {
-    return Container(
-      height: 70,
-      decoration: const BoxDecoration(
-        color: Color(0xFFFFFDFA),
-        border: Border(top: BorderSide(color: Color(0xFFE5DFD3))),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildNavItem(
-            Icons.restaurant,
-            'Menu',
-            onTap: () {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')),
-              );
-            },
-          ),
-          _buildNavItem(
-            Icons.track_changes,
-            'Live Status',
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => OrderStatusScreen(
-                    orderId: UserSession.activeOrderId,
-                    isTakeout: widget.isTakeout,
-                    tableId: tableNum,
-                    isAdditionalOrder: UserSession.isAdditionalOrder,
-                  ),
-                ),
-              );
-            },
-          ),
-          _buildNavItem(
-            Icons.account_balance_wallet,
-            'Pay',
-            isActive: true,
-            onTap: () {},
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNavItem(
-      IconData icon,
-      String label, {
-        bool isActive = false,
-        required VoidCallback onTap,
-      }) {
-    return InkWell(
-      onTap: onTap,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            icon,
-            size: 20,
-            color: isActive ? const Color(0xFF203F35) : const Color(0xFF788078),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-              color: isActive
-                  ? const Color(0xFF203F35)
-                  : const Color(0xFF788078),
+    return CustomerBottomNav(
+      activeTab: CustomerNavTab.bill,
+      onMenu: _goToMenu,
+      onCart: () {
+        MenuCartIntent.requestOpen();
+        _goToMenu();
+      },
+      onLiveStatus: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => OrderStatusScreen(
+              orderId: UserSession.activeOrderId,
+              isTakeout: widget.isTakeout,
+              tableId: tableNum,
+              isAdditionalOrder: UserSession.isAdditionalOrder,
             ),
           ),
-          if (isActive) ...[
-            const SizedBox(height: 2),
-            Container(
-              width: 16,
-              height: 2,
-              decoration: BoxDecoration(
-                color: const Color(0xFFA47C3D),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ],
-        ],
-      ),
+        );
+      },
+      onBill: () {},
     );
   }
 }

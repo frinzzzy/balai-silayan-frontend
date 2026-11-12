@@ -5,6 +5,7 @@ import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
 import 'user_session.dart';
+import '../widgets/customer_bottom_nav.dart';
 import 'services/global_socket_listener.dart';
 import 'config/api_config.dart';
 
@@ -161,10 +162,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             onPressed: () {
               Navigator.pop(ctx);
               UserSession.clearSession();
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')),
-                    (route) => false,
-              );
+              _goToMenu();
             },
             child: const Text('Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
@@ -180,11 +178,40 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
     super.dispose();
   }
 
-  void _navigateToMenu() {
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')),
-          (route) => false,
-    );
+  void _goToMenu() {
+    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
+    final NavigatorState nav = Navigator.of(context);
+    bool foundMenu = false;
+    nav.popUntil((route) {
+      if (route.settings.name == 'menu') {
+        foundMenu = true;
+        return true;
+      }
+      return route.isFirst;
+    });
+    if (!foundMenu) {
+      nav.push(
+        MaterialPageRoute(
+          builder: (context) => MenuScreen(
+            tableId: tableNum,
+            tableNumber: tableNum,
+            isAdditionalOrder: UserSession.isAdditionalOrder,
+          ),
+          settings: const RouteSettings(name: 'menu'),
+        ),
+      );
+    }
+  }
+
+  /// Back button: bumalik sa pinanggalingan (Order Type Selection o Menu),
+  /// hindi laging tumatalon sa Menu.
+  void _goBack() {
+    final NavigatorState nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+    } else {
+      _goToMenu();
+    }
   }
 
   @override
@@ -304,7 +331,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
                   ),
                   elevation: 0,
                 ),
-                onPressed: _navigateToMenu,
+                onPressed: _goToMenu,
                 child: const Text(
                   'Back to Menu',
                   style: TextStyle(
@@ -328,7 +355,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           InkWell(
-            onTap: _navigateToMenu,
+            onTap: _goBack,
             borderRadius: BorderRadius.circular(22),
             child: Container(
               width: 44,
@@ -584,66 +611,34 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
           side: const BorderSide(color: Color(0xFFE5DFD3)),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
-        onPressed: _navigateToMenu,
+        onPressed: _goToMenu,
         child: const Text('Back to menu', style: TextStyle(color: Color(0xFF203F35), fontWeight: FontWeight.bold, fontSize: 14)),
       ),
     );
   }
 
   Widget _buildCustomerBottomNav(int tableNum) {
-    return Container(
-      height: 70,
-      decoration: const BoxDecoration(
-        color: Color(0xFFFFFDFA),
-        border: Border(top: BorderSide(color: Color(0xFFE5DFD3))),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildNavItem(Icons.restaurant, 'Menu', onTap: () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')));
-          }),
-          _buildNavItem(Icons.track_changes, 'Live Status', onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => OrderStatusScreen(
-                  orderId: UserSession.activeOrderId,
-                  isTakeout: widget.isTakeout,
-                  tableId: tableNum,
-                  isAdditionalOrder: UserSession.isAdditionalOrder,
-                ),
-              ),
-            );
-          }),
-          _buildNavItem(Icons.account_balance_wallet, 'Pay', isActive: true, onTap: () {}),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNavItem(IconData icon, String label, {bool isActive = false, required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 20, color: isActive ? const Color(0xFF203F35) : const Color(0xFF788078)),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-              color: isActive ? const Color(0xFF203F35) : const Color(0xFF788078),
+    return CustomerBottomNav(
+      activeTab: CustomerNavTab.bill,
+      onMenu: _goToMenu,
+      onCart: () {
+        MenuCartIntent.requestOpen();
+        _goToMenu();
+      },
+      onLiveStatus: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => OrderStatusScreen(
+              orderId: UserSession.activeOrderId,
+              isTakeout: widget.isTakeout,
+              tableId: tableNum,
+              isAdditionalOrder: UserSession.isAdditionalOrder,
             ),
           ),
-          if (isActive) ...[
-            const SizedBox(height: 2),
-            Container(width: 16, height: 2, decoration: BoxDecoration(color: const Color(0xFFA47C3D), borderRadius: BorderRadius.circular(2))),
-          ]
-        ],
-      ),
+        );
+      },
+      onBill: () {},
     );
   }
 }

@@ -493,7 +493,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
             final totalAmt = double.tryParse(selectedTicket['total_amount']?.toString() ?? '0') ?? 0.0;
             final itemsList = selectedTicket['items'] is List ? selectedTicket['items'] : [];
 
-            Navigator.pushReplacement(
+            Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (context) => OrderStatusScreen(
@@ -521,7 +521,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
 
     if (!mounted) return;
 
-    Navigator.pushReplacement(
+    Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => MenuScreen(
@@ -719,63 +719,64 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
     );
   }
 
+  Future<void> _confirmChangeTable() async {
+    final bool? changeTable = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Change Table?',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF203F35),
+          ),
+        ),
+        content: const Text(
+          'Do you want to change table? This will clear your current table session.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('No', style: TextStyle(color: Color(0xFF788078))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF203F35),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Yes',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (changeTable == true && mounted) {
+      UserSession.clearSession();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const QrScannerScreen()),
+      );
+    }
+  }
+
   Widget _buildRestaurantHeader() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         InkWell(
-          onTap: () async {
-            final bool? changeTable = await showDialog<bool>(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                backgroundColor: const Color(0xFFFFFDFA),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                title: const Text(
-                  'Change Table?',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF203F35),
-                  ),
-                ),
-                content: const Text(
-                  'Do you want to change table? This will clear your current table session.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, false),
-                    child: const Text(
-                      'No',
-                      style: TextStyle(color: Color(0xFF788078)),
-                    ),
-                  ),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF203F35),
-                    ),
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text(
-                      'Yes',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-
-            if (changeTable == true && mounted) {
-              UserSession.clearSession();
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const QrScannerScreen(),
-                ),
-              );
+          onTap: () {
+            final NavigatorState nav = Navigator.of(context);
+            if (nav.canPop()) {
+              nav.pop();
+              return;
             }
+            nav.pushReplacement(
+              MaterialPageRoute(builder: (context) => const QrScannerScreen()),
+            );
           },
           borderRadius: BorderRadius.circular(22),
           child: Container(
@@ -871,13 +872,34 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
               ),
             ],
           ),
-          const Text(
-            'Dine-in',
-            style: TextStyle(
-              fontSize: 10,
-              color: Color(0xFF788078),
-              fontWeight: FontWeight.w500,
-            ),
+          Row(
+            children: [
+              const Text(
+                'Dine-in',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFF788078),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(width: 10),
+              InkWell(
+                onTap: _confirmChangeTable,
+                borderRadius: BorderRadius.circular(6),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Text(
+                    'Change',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFFA47C3D),
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

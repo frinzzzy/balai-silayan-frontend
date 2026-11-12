@@ -550,7 +550,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           initialOrderItems: initialOrderItems,
         ),
       ),
-      (route) => route.isFirst,
+      // Panatilihin ang Menu sa ilalim ng Live Status para ang phone Back ay
+      // babalik sa Menu (hindi sa welcome/QR screen).
+      (route) => route.settings.name == 'menu' || route.isFirst,
     );
   }
 

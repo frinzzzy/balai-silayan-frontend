@@ -3,8 +3,9 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 
-import 'qr_scanner_screen.dart';
-import 'order_type_selection_screen.dart';
+import 'menu_screen.dart';
+import 'session_bill_screen.dart';
+import '../widgets/customer_bottom_nav.dart';
 import '../widgets/finished_order_dialog.dart';
 import 'user_session.dart';
 import 'services/audio_notification_service.dart';
@@ -562,16 +563,32 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   }
 
   void _navigateToMenu() {
-    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (context) => OrderTypeSelectionScreen(
-          tableId: tableNum,
-          tableNumber: tableNum,
+    final int tableNum = widget.tableId ??
+        UserSession.activeTableId ??
+        UserSession.activeTableNumber ??
+        7;
+    final NavigatorState nav = Navigator.of(context);
+    bool foundMenu = false;
+    nav.popUntil((route) {
+      if (route.settings.name == 'menu') {
+        foundMenu = true;
+        return true;
+      }
+      return route.isFirst;
+    });
+    if (!foundMenu) {
+      nav.push(
+        MaterialPageRoute(
+          builder: (context) => MenuScreen(
+            tableId: tableNum,
+            tableNumber: tableNum,
+            isAdditionalOrder:
+                widget.isAdditionalOrder || UserSession.isAdditionalOrder,
+          ),
+          settings: const RouteSettings(name: 'menu'),
         ),
-      ),
-          (route) => false,
-    );
+      );
+    }
   }
 
   @override
@@ -588,79 +605,65 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         ? _fetchedOrderCode
         : _formatOrderCode(widget.orderId);
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return;
-        final shouldExit = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            backgroundColor: const Color(0xFFFFFDFA),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-            title: const Text('End Session?', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
-            content: const Text('Are you sure to end this session?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('No', style: TextStyle(color: Color(0xFF788078))),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Yes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            ],
-          ),
-        );
-        if (shouldExit == true && context.mounted) {
-          UserSession.clearSession();
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (context) => const QrScannerScreen()),
-                (route) => false,
-          );
-        }
-      },
-      child: Scaffold(
-        backgroundColor: const Color(0xFFF8F4EC),
-        body: SafeArea(
-          child: Column(
-            children: [
-              _buildRestaurantHeader(),
-              _buildTableContextStrip(tableString),
-              Expanded(
-                child: _isLoadingLiveOrder
-                    ? const Center(
-                  child: CircularProgressIndicator(
-                    color: Color(0xFF203F35),
-                  ),
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F4EC),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildRestaurantHeader(),
+            _buildTableContextStrip(tableString),
+            Expanded(
+              child: _isLoadingLiveOrder
+                  ? const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF203F35),
+                ),
+              )
+                  : !_hasActiveOrder
+                  ? _buildNoOrderView()
+                  : SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24.0,
+                  vertical: 16.0,
+                ),
+                child: _showLiveTrackerView
+                    ? _buildLiveStatusTrackerView(
+                  displayOrderCode,
+                  tableString,
                 )
-                    : !_hasActiveOrder
-                    ? _buildNoOrderView()
-                    : SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24.0,
-                    vertical: 16.0,
-                  ),
-                  child: _showLiveTrackerView
-                      ? _buildLiveStatusTrackerView(
-                    displayOrderCode,
-                    tableString,
-                  )
-                      : _billRequested
-                      ? _buildBillRequestedView(
-                    displayOrderCode,
-                    tableString,
-                  )
-                      : _buildConfirmationView(
-                    displayOrderCode,
-                    tableString,
-                  ),
+                    : _billRequested
+                    ? _buildBillRequestedView(
+                  displayOrderCode,
+                  tableString,
+                )
+                    : _buildConfirmationView(
+                  displayOrderCode,
+                  tableString,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
+      ),
+      bottomNavigationBar: CustomerBottomNav(
+        activeTab: CustomerNavTab.liveStatus,
+        onMenu: _navigateToMenu,
+        onCart: () {
+          MenuCartIntent.requestOpen();
+          _navigateToMenu();
+        },
+        onLiveStatus: () {},
+        onBill: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => SessionBillScreen(
+                tableId: tableNum,
+                isTakeout: widget.isTakeout,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
