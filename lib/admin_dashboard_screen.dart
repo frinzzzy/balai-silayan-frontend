@@ -44,6 +44,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // i-notify lang ang mga bagong ticket/stock na lumitaw pagkatapos.
   final Set<int> _knownOrderIds = <int>{};
   bool _orderIdsSeeded = false;
+
+  // Snapshot per order. Kailangan ito dahil kapag PENDING/NEW ang parent
+  // ticket, hindi nagdadagdag ng bagong order row ang additional order —
+  // dinadagdagan lang ang total_amount ng parehong row. Kung ID-diff lang
+  // ang gagamitin, walang notifications para sa ganitong additional orders.
+  final Map<int, double> _knownOrderTotals = <int, double>{};
+  final Map<int, bool> _knownOrderAdditionalFlags = <int, bool>{};
+
   final Set<String> _lowStockItemIds = <String>{};
   bool _lowStockSeeded = false;
   bool _lowStockCheckInFlight = false;
@@ -143,19 +151,43 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     final bool wasSeeded = _orderIdsSeeded;
     final List<AdminOrder> newOrders = <AdminOrder>[];
+    final List<AdminOrder> updatedAdditionalOrders = <AdminOrder>[];
     if (wasSeeded) {
       for (final AdminOrder order in orders) {
-        if (!_knownOrderIds.contains(order.id)) newOrders.add(order);
+        if (!_knownOrderIds.contains(order.id)) {
+          newOrders.add(order);
+          continue;
+        }
+        // Existing row na naging additional / dinagdagan ng items. Nangyayari
+        // ito kapag PENDING/NEW pa ang parent: same order id, tumaas lang ang
+        // total_amount at naging is_additional_order = TRUE.
+        if (!order.isAdditional) continue;
+        final double? previousTotal = _knownOrderTotals[order.id];
+        final bool wasAdditional = _knownOrderAdditionalFlags[order.id] ?? false;
+        final bool totalIncreased =
+            previousTotal != null && order.totalAmount > previousTotal + 0.009;
+        if (totalIncreased || !wasAdditional) {
+          updatedAdditionalOrders.add(order);
+        }
       }
     }
     _knownOrderIds
       ..clear()
       ..addAll(orders.map((o) => o.id));
+    _knownOrderTotals
+      ..clear()
+      ..addEntries(orders.map((o) => MapEntry(o.id, o.totalAmount)));
+    _knownOrderAdditionalFlags
+      ..clear()
+      ..addEntries(orders.map((o) => MapEntry(o.id, o.isAdditional)));
     _orderIdsSeeded = true;
 
     // Notify bago ang setState para kasama agad sa rebuild ang unread badge.
     if (wasSeeded && newOrders.isNotEmpty) {
       _notifyNewOrders(newOrders);
+    }
+    if (wasSeeded && updatedAdditionalOrders.isNotEmpty) {
+      _notifyAdditionalOrderUpdates(updatedAdditionalOrders);
     }
     // Unang load: i-seed ang dedupe keys ng lumang bill requests para hindi
     // mag-replay nang isa-isa. Bagong request lang ang mag-a-alert pagkatapos.
@@ -180,6 +212,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         orderId: order.id,
         parentOrderId: order.parentOrderId,
         isAdditional: order.isAdditional,
+        itemsSummary: order.itemsDescription,
+        totalAmount: order.totalAmount.toStringAsFixed(2),
+      );
+    }
+  }
+
+  /// Alert kapag may idinagdag na items sa existing (PENDING/NEW) parent ticket.
+  /// Hindi ito lumalabas sa ID-diff dahil parehong order row lang ang na-update.
+  void _notifyAdditionalOrderUpdates(Iterable<AdminOrder> orders) {
+    for (final AdminOrder order in orders) {
+      AudioNotificationService.showAdminNewOrderBanner(
+        tableNumber: order.tableNumber,
+        orderId: order.id,
+        parentOrderId: order.parentOrderId,
+        isAdditional: true,
         itemsSummary: order.itemsDescription,
         totalAmount: order.totalAmount.toStringAsFixed(2),
       );
@@ -466,6 +513,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               UserSession.clearSession();
               AdminService.staffAuthToken = null;
               _orderIdsSeeded = false;
+              _knownOrderIds.clear();
+              _knownOrderTotals.clear();
+              _knownOrderAdditionalFlags.clear();
               _lowStockSeeded = false;
               if (!mounted) return;
               Navigator.pushAndRemoveUntil(

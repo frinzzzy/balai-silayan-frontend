@@ -575,7 +575,12 @@ class AudioNotificationService {
     final String rootCode = rootOrderId != null
         ? UserSession.formatOrderCode(rootOrderId)
         : orderCode;
-    final String dedupeKey = 'admin_new_order|$orderCode';
+    // Additional orders: isama ang total sa dedupe key para may bagong alert
+    // sa bawat pagdagdag ng items — kahit PENDING/NEW pa ang parent at
+    // parehong order row lang ang na-update (merged additional items).
+    final String dedupeKey = isAdditional
+        ? 'admin_additional|$orderCode|${totalAmount ?? ''}'
+        : 'admin_new_order|$orderCode';
     // Isang beses lang per ticket sa buong shift.
     if (!NotificationCenter.instance.shouldNotify(
       dedupeKey,
