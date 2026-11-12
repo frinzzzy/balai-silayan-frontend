@@ -90,6 +90,7 @@ class StockManagementScreenState extends State<StockManagementScreen> {
       };
 
   List<_StockCategoryFilter> get _categoryFilters => <_StockCategoryFilter>[
+        const _StockCategoryFilter(key: 'low', label: 'Low Stock'),
         const _StockCategoryFilter(key: 'all', label: 'All Items'),
         ..._menuCategories.map(
           (category) => _StockCategoryFilter(
@@ -97,7 +98,6 @@ class StockManagementScreenState extends State<StockManagementScreen> {
             label: (category['name'] ?? 'Category').toString(),
           ),
         ),
-        const _StockCategoryFilter(key: 'low', label: 'Low Stock'),
       ];
 
   int _asInt(dynamic value, int fallback) {
