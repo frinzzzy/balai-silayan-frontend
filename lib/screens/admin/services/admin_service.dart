@@ -239,6 +239,26 @@ class AdminService {
     return [];
   }
 
+  /// GET /api/v1/categories
+  /// Ginagamit para makuha ang totoong menu categories ng DB (parehong source
+  /// ng customer menu) para hindi hardcoded ang category filters.
+  Future<List<Map<String, dynamic>>> fetchMenuCategories() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl/api/v1/categories'),
+        headers: _authHeaders,
+      ).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        final List list = decoded['data'] ?? decoded['categories'] ?? [];
+        return list.map((e) => Map<String, dynamic>.from(e)).toList();
+      }
+    } catch (e) {
+      debugPrint('Error fetching menu categories: $e');
+    }
+    return [];
+  }
+
   /// PATCH /api/v1/menu/:id/stock
   Future<bool> updateItemStock({required int itemId, required int stockQuantity, String adjustmentType = 'RESTOCK'}) async {
     try {

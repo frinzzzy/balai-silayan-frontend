@@ -18,12 +18,13 @@ class StockManagementScreen extends StatefulWidget {
 class StockManagementScreenState extends State<StockManagementScreen> {
   final AdminService _adminService = AdminService();
   List<Map<String, dynamic>> _inventoryItems = [];
+  List<Map<String, dynamic>> _menuCategories = [];
   bool _isLoading = true;
-  String _selectedCategoryFilter = 'All Items';
+  bool _loadFailed = false;
+  // 'all' | 'low' | 'cat:<category_id>'
+  String _selectedCategoryKey = 'all';
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
-
-  final List<String> _categories = ['All Items', 'Main Dishes', 'Drinks', 'Desserts', 'Low Stock'];
 
   @override
   void initState() {
@@ -39,29 +40,94 @@ class StockManagementScreenState extends State<StockManagementScreen> {
 
   // 🔄 Public method para tawagin mula sa labas (AdminDashboard) para sa live refresh
   Future<void> loadInventorySilently() async {
-    final items = await _adminService.fetchMenuInventory();
-    if (mounted) {
-      setState(() {
-        _inventoryItems = items;
-      });
-    }
+    await _fetchInventoryAndCategories(showLoading: false);
   }
 
   Future<void> _loadInventory() async {
-    setState(() => _isLoading = true);
-    final items = await _adminService.fetchMenuInventory();
-    if (mounted) {
+    await _fetchInventoryAndCategories(showLoading: true);
+  }
+
+  Future<void> _fetchInventoryAndCategories({required bool showLoading}) async {
+    if (showLoading) {
       setState(() {
-        _inventoryItems = items;
-        _isLoading = false;
+        _isLoading = true;
+        _loadFailed = false;
       });
     }
+
+    final List<Object> results = await Future.wait<Object>([
+      _adminService.fetchMenuInventory(),
+      _adminService.fetchMenuCategories(),
+    ]);
+    final List<Map<String, dynamic>> items =
+        (results[0] as List).cast<Map<String, dynamic>>();
+    final List<Map<String, dynamic>> categories =
+        (results[1] as List).cast<Map<String, dynamic>>();
+
+    if (!mounted) return;
+
+    setState(() {
+      _inventoryItems = items;
+      // Huwag i-blanko ang dating categories kapag bigo ang categories API —
+      // mas mabuti ang lumang listahan kaysa mawala lahat ng chips.
+      if (categories.isNotEmpty) {
+        _menuCategories = categories;
+      }
+      _isLoading = false;
+      _loadFailed = items.isEmpty && categories.isEmpty;
+      if (!_availableCategoryKeys.contains(_selectedCategoryKey)) {
+        _selectedCategoryKey = 'all';
+      }
+    });
+  }
+
+  Set<String> get _availableCategoryKeys => <String>{
+        'all',
+        'low',
+        ..._menuCategories.map(
+          (category) => 'cat:${(category['id'] ?? '').toString()}',
+        ),
+      };
+
+  List<_StockCategoryFilter> get _categoryFilters => <_StockCategoryFilter>[
+        const _StockCategoryFilter(key: 'all', label: 'All Items'),
+        ..._menuCategories.map(
+          (category) => _StockCategoryFilter(
+            key: 'cat:${(category['id'] ?? '').toString()}',
+            label: (category['name'] ?? 'Category').toString(),
+          ),
+        ),
+        const _StockCategoryFilter(key: 'low', label: 'Low Stock'),
+      ];
+
+  int _asInt(dynamic value, int fallback) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? fallback;
+  }
+
+  String _categoryNameFor(Map<String, dynamic> item) {
+    final dynamic rawName = item['category_name'] ?? item['category'];
+    if (rawName != null && rawName.toString().trim().isNotEmpty) {
+      return rawName.toString();
+    }
+    final int? categoryId =
+        int.tryParse((item['category_id'] ?? '').toString());
+    if (categoryId != null) {
+      for (final Map<String, dynamic> category in _menuCategories) {
+        final int? id = int.tryParse((category['id'] ?? '').toString());
+        if (id == categoryId) {
+          return (category['name'] ?? 'Category $categoryId').toString();
+        }
+      }
+    }
+    return 'Uncategorized';
   }
 
   void _showUpdateStockDialog(BuildContext context, Map<String, dynamic> item) {
-    final int itemId = item['id'] ?? 0;
+    final int itemId = _asInt(item['id'], 0);
     final String itemName = item['name'] ?? 'Item';
-    final int currentStock = item['stock_quantity'] ?? 50;
+    final int currentStock = _asInt(item['stock_quantity'], 50);
     final TextEditingController stockController = TextEditingController(text: currentStock.toString());
     String adjustmentType = 'RESTOCK';
 
@@ -165,23 +231,26 @@ class StockManagementScreenState extends State<StockManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bool lowStockOnly = _selectedCategoryKey == 'low';
+    final int? selectedCategoryId = _selectedCategoryKey.startsWith('cat:')
+        ? int.tryParse(_selectedCategoryKey.substring(4))
+        : null;
+
     List<Map<String, dynamic>> filtered = _inventoryItems.where((item) {
       final String name = (item['name'] ?? '').toString().toLowerCase();
-      final String cat = (item['category_name'] ?? item['category'] ?? '').toString().toLowerCase();
-      final int stock = item['stock_quantity'] ?? 50;
-      final int threshold = item['low_stock_threshold'] ?? 10;
+      final int stock = _asInt(item['stock_quantity'], 50);
+      final int threshold = _asInt(item['low_stock_threshold'], 10);
+      final int? categoryId =
+          int.tryParse((item['category_id'] ?? '').toString());
 
-      final bool matchesSearch = _searchQuery.isEmpty || name.contains(_searchQuery.toLowerCase());
+      final bool matchesSearch =
+          _searchQuery.isEmpty || name.contains(_searchQuery.toLowerCase());
       bool matchesCategory = true;
 
-      if (_selectedCategoryFilter == 'Main Dishes') {
-        matchesCategory = cat.contains('main') || cat.contains('specialty') || cat.contains('sizzling') || cat.contains('pancit') || cat.contains('pasta');
-      } else if (_selectedCategoryFilter == 'Drinks') {
-        matchesCategory = cat.contains('drink') || cat.contains('beverage') || cat.contains('cooler');
-      } else if (_selectedCategoryFilter == 'Desserts') {
-        matchesCategory = cat.contains('dessert') || cat.contains('ice cream') || cat.contains('halo');
-      } else if (_selectedCategoryFilter == 'Low Stock') {
+      if (lowStockOnly) {
         matchesCategory = stock <= threshold;
+      } else if (selectedCategoryId != null) {
+        matchesCategory = categoryId == selectedCategoryId;
       }
 
       return matchesSearch && matchesCategory;
@@ -259,14 +328,14 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                 height: 38,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
-                  itemCount: _categories.length,
+                  itemCount: _categoryFilters.length,
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
                   itemBuilder: (context, index) {
-                    final cat = _categories[index];
-                    final isSelected = _selectedCategoryFilter == cat;
+                    final _StockCategoryFilter category = _categoryFilters[index];
+                    final isSelected = _selectedCategoryKey == category.key;
                     return ChoiceChip(
                       label: Text(
-                        cat,
+                        category.label,
                         style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 12,
@@ -284,7 +353,9 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                         ),
                       ),
                       onSelected: (val) {
-                        if (val) setState(() => _selectedCategoryFilter = cat);
+                        if (val) {
+                          setState(() => _selectedCategoryKey = category.key);
+                        }
                       },
                     );
                   },
@@ -304,9 +375,40 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                   padding: const EdgeInsets.all(40.0),
                   child: Column(
                     children: [
-                      const Icon(Icons.inventory_2_outlined, size: 48, color: AdminTheme.mutedDark),
+                      Icon(
+                        _loadFailed
+                            ? Icons.cloud_off
+                            : Icons.inventory_2_outlined,
+                        size: 48,
+                        color: AdminTheme.mutedDark,
+                      ),
                       const SizedBox(height: 12),
-                      const Text('No inventory items found.', style: TextStyle(fontFamily: 'Inter', fontSize: 14, fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
+                      Text(
+                        _loadFailed
+                            ? 'Could not load inventory.'
+                            : 'No inventory items found.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontFamily: 'Inter', fontSize: 14, fontWeight: FontWeight.bold, color: AdminTheme.textDark),
+                      ),
+                      if (_loadFailed) ...[
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Check the connection and try again.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontFamily: 'Inter', fontSize: 12, color: AdminTheme.mutedDark),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AdminTheme.textDark,
+                          ),
+                          onPressed: _loadInventory,
+                          child: const Text(
+                            'Retry',
+                            style: TextStyle(fontFamily: 'Inter', color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -319,8 +421,9 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                   final item = filtered[index];
                   final String name = item['name'] ?? 'Unnamed Dish';
                   final double price = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
-                  final int stock = item['stock_quantity'] ?? 50;
-                  final int threshold = item['low_stock_threshold'] ?? 10;
+                  final int stock = _asInt(item['stock_quantity'], 50);
+                  final int threshold = _asInt(item['low_stock_threshold'], 10);
+                  final String categoryName = _categoryNameFor(item);
                   final String? localImage = localMenuImageFor(name);
 
                   String statusLabel = 'In Stock';
@@ -411,7 +514,7 @@ class StockManagementScreenState extends State<StockManagementScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '₱${price.toStringAsFixed(2)} • Threshold: $threshold',
+                                '$categoryName • ₱${price.toStringAsFixed(2)} • Threshold: $threshold',
                                 style: const TextStyle(fontFamily: 'Inter', fontSize: 12, color: AdminTheme.mutedDark),
                               ),
                               const SizedBox(height: 8),
@@ -462,4 +565,11 @@ class StockManagementScreenState extends State<StockManagementScreen> {
       ),
     );
   }
+}
+
+class _StockCategoryFilter {
+  const _StockCategoryFilter({required this.key, required this.label});
+
+  final String key;
+  final String label;
 }
