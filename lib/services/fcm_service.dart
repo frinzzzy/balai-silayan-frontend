@@ -17,20 +17,26 @@ import '../user_session.dart';
 Future<void> fcmBackgroundMessageHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
 
-  final FlutterLocalNotificationsPlugin plugin = FlutterLocalNotificationsPlugin();
+  // Kapag may `notification` payload, ang Android FCM SDK na mismo ang
+  // nagdi-display sa tray. Huwag nang mag-show muli para hindi doble.
+  if (message.notification != null) return;
+
+  final FlutterLocalNotificationsPlugin plugin =
+      FlutterLocalNotificationsPlugin();
   await plugin.initialize(
     settings: const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     ),
   );
 
-  final String? title = message.notification?.title;
-  final String? body = message.notification?.body;
+  final String title =
+      message.data['title']?.toString() ?? 'Balai Silayan';
+  final String body = message.data['body']?.toString() ?? '';
 
   await plugin.show(
     id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    title: message.data['title']?.toString() ?? title ?? 'Balai Silayan',
-    body: message.data['body']?.toString() ?? body ?? '',
+    title: title,
+    body: body,
     notificationDetails: const NotificationDetails(
       android: AndroidNotificationDetails(
         'balai_silayan_orders',
@@ -50,32 +56,53 @@ Future<void> fcmBackgroundMessageHandler(RemoteMessage message) async {
 class FcmService {
   FcmService._();
 
+  static const String _staffTokenPath = '/api/v1/staff/fcm-token';
+
   static String? _cachedToken;
+  static bool _backgroundHandlerRegistered = false;
+  static bool _tokenRefreshListening = false;
+
+  // Huling role na na-register para maulit ang tamang endpoint kapag
+  // nag-refresh ang FCM token.
+  static String? _registeredMode; // 'customer' | 'staff'
+  static String? _registeredStaffToken;
+  static int? _registeredSessionId;
+  static String? _registeredSessionToken;
 
   static Future<void> init() async {
     try {
       await Firebase.initializeApp();
 
-      FirebaseMessaging.onBackgroundMessage(fcmBackgroundMessageHandler);
+      // I-register agad kahit denied ang permission. Kapag pinayagan ito sa
+      // Settings at nag-resume ang app, hindi na kailangan ng app restart.
+      if (!_backgroundHandlerRegistered) {
+        FirebaseMessaging.onBackgroundMessage(fcmBackgroundMessageHandler);
+        _backgroundHandlerRegistered = true;
+      }
 
-      final NotificationSettings settings = await FirebaseMessaging.instance.requestPermission();
+      if (!_tokenRefreshListening) {
+        _tokenRefreshListening = true;
+        FirebaseMessaging.instance.onTokenRefresh.listen((String newToken) {
+          _cachedToken = newToken;
+          debugPrint('🔄 [FCM] Token refreshed.');
+          unawaited(_registerCurrentMode(newToken));
+        });
+      }
+
+      final NotificationSettings settings =
+          await FirebaseMessaging.instance.requestPermission();
       if (settings.authorizationStatus == AuthorizationStatus.denied) {
-        debugPrint('⚠️ [FCM] Notification permission denied.');
+        debugPrint(
+          '⚠️ [FCM] Notification permission denied — push registration will retry on the next launch/resume.',
+        );
         return;
       }
 
-      final String? token = await FirebaseMessaging.instance.getToken();
-      if (token != null) {
-        _cachedToken = token;
-        debugPrint('✅ [FCM] Token acquired: $token');
-        await _register(token);
-      }
+      final String? token = await _token();
+      if (token == null) return;
 
-      FirebaseMessaging.instance.onTokenRefresh.listen((String newToken) {
-        _cachedToken = newToken;
-        debugPrint('🔄 [FCM] Token refreshed: $newToken');
-        _register(newToken);
-      });
+      debugPrint('✅ [FCM] Token acquired.');
+      await _registerCurrentMode(token);
     } catch (e) {
       debugPrint('⚠️ [FCM] init failed: $e');
     }
@@ -85,32 +112,182 @@ class FcmService {
   /// ma-link ang FCM token sa tamang session/table.
   static Future<void> registerCurrentSession() async {
     try {
-      final String? token = await FirebaseMessaging.instance.getToken();
-      if (token != null) {
-        _cachedToken = token;
-        await _register(token);
+      final int? sessionId = UserSession.activeSessionId ??
+          int.tryParse(UserSession.sessionId ?? '');
+      final String? sessionToken = UserSession.activeSessionToken;
+      if (sessionId == null ||
+          sessionId <= 0 ||
+          sessionToken == null ||
+          sessionToken.isEmpty) {
+        return;
       }
+
+      final String? token = await _token();
+      if (token == null) return;
+
+      await _registerAsCustomer(
+        token: token,
+        sessionId: sessionId,
+        sessionToken: sessionToken,
+      );
     } catch (e) {
       debugPrint('⚠️ [FCM] registerCurrentSession failed: $e');
     }
   }
 
-  static Future<void> _register(String token) async {
+  /// I-register ang device bilang staff/admin device. Tinatawag ito pagkatapos
+  /// ng admin login para may background alerts ang admin kahit nasa labas ng app.
+  static Future<void> registerAsStaff({String? authToken}) async {
+    try {
+      final String? token = authToken ?? UserSession.authToken;
+      if (token == null || token.isEmpty) return;
+
+      final String? fcmToken = await _token();
+      if (fcmToken == null) return;
+
+      await _registerAsStaff(token: fcmToken, staffAuthToken: token);
+    } catch (e) {
+      debugPrint('⚠️ [FCM] registerAsStaff failed: $e');
+    }
+  }
+
+  /// Tanggalin ang staff token sa logout para hindi na padalhan ng admin
+  /// alerts ang device na hindi na naka-login.
+  static Future<void> unregisterAsStaff() async {
+    final String? fcmToken = _cachedToken;
+    final String? staffToken = _registeredStaffToken ?? UserSession.authToken;
+    if (fcmToken == null || staffToken == null || staffToken.isEmpty) return;
+
     try {
       final http.Client client = http.Client();
-      final http.Response response = await client.post(
-        Uri.parse('${ApiConfig.baseUrl}/api/v1/devices/register'),
-        headers: const {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'token': token,
-          'session_id': UserSession.activeSessionId,
-          'table_id': UserSession.activeTableId,
-        }),
-      );
-      client.close();
-      debugPrint('✅ [FCM] Token registered (status=${response.statusCode}).');
+      try {
+        await client
+            .delete(
+              Uri.parse('${ApiConfig.baseUrl}$_staffTokenPath'),
+              headers: <String, String>{
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $staffToken',
+              },
+              body: jsonEncode(<String, String>{'fcm_token': fcmToken}),
+            )
+            .timeout(const Duration(seconds: 15));
+      } finally {
+        client.close();
+      }
+      debugPrint('✅ [FCM] Staff token unregistered.');
     } catch (e) {
-      debugPrint('⚠️ [FCM] register error: $e');
+      debugPrint('⚠️ [FCM] unregisterAsStaff error: $e');
+    } finally {
+      if (_registeredMode == 'staff') {
+        _registeredMode = null;
+        _registeredStaffToken = null;
+      }
+    }
+  }
+
+  static Future<String?> _token() async {
+    if (_cachedToken != null && _cachedToken!.isNotEmpty) return _cachedToken;
+    final String? token = await FirebaseMessaging.instance.getToken();
+    if (token != null && token.isNotEmpty) {
+      _cachedToken = token;
+      return token;
+    }
+    return null;
+  }
+
+  static Future<void> _registerCurrentMode(String token) async {
+    if (_registeredMode == 'staff' && _registeredStaffToken != null) {
+      await _registerAsStaff(
+        token: token,
+        staffAuthToken: _registeredStaffToken!,
+      );
+      return;
+    }
+
+    if (_registeredMode == 'customer' &&
+        _registeredSessionId != null &&
+        _registeredSessionToken != null) {
+      await _registerAsCustomer(
+        token: token,
+        sessionId: _registeredSessionId!,
+        sessionToken: _registeredSessionToken!,
+      );
+      return;
+    }
+
+    await registerCurrentSession();
+  }
+
+  static Future<void> _registerAsCustomer({
+    required String token,
+    required int sessionId,
+    required String sessionToken,
+  }) async {
+    try {
+      final http.Response response = await _postJson(
+        '${ApiConfig.baseUrl}/api/v1/customer/sessions/$sessionId/fcm-token',
+        headers: <String, String>{
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $sessionToken',
+        },
+        body: <String, dynamic>{'fcm_token': token},
+      );
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        _registeredMode = 'customer';
+        _registeredSessionId = sessionId;
+        _registeredSessionToken = sessionToken;
+        debugPrint('✅ [FCM] Customer token registered (status=${response.statusCode}).');
+      } else {
+        debugPrint(
+          '⚠️ [FCM] Customer token registration failed (status=${response.statusCode}): ${response.body}',
+        );
+      }
+    } catch (e) {
+      debugPrint('⚠️ [FCM] registerAsCustomer error: $e');
+    }
+  }
+
+  static Future<void> _registerAsStaff({
+    required String token,
+    required String staffAuthToken,
+  }) async {
+    try {
+      final http.Response response = await _postJson(
+        '${ApiConfig.baseUrl}$_staffTokenPath',
+        headers: <String, String>{
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $staffAuthToken',
+        },
+        body: <String, dynamic>{'fcm_token': token},
+      );
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        _registeredMode = 'staff';
+        _registeredStaffToken = staffAuthToken;
+        _registeredSessionId = null;
+        _registeredSessionToken = null;
+        debugPrint('✅ [FCM] Staff token registered (status=${response.statusCode}).');
+      } else {
+        debugPrint(
+          '⚠️ [FCM] Staff token registration failed (status=${response.statusCode}): ${response.body}',
+        );
+      }
+    } catch (e) {
+      debugPrint('⚠️ [FCM] registerAsStaff error: $e');
+    }
+  }
+
+  static Future<http.Response> _postJson(
+    String url, {
+    required Map<String, String> headers,
+    required Map<String, dynamic> body,
+  }) async {
+    final http.Client client = http.Client();
+    try {
+      return await client
+          .post(Uri.parse(url), headers: headers, body: jsonEncode(body))
+          .timeout(const Duration(seconds: 15));
+    } finally {
+      client.close();
     }
   }
 }

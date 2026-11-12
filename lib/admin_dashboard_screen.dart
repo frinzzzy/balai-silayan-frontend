@@ -9,6 +9,7 @@ import 'screens/admin/screens/sales_analytics_screen.dart';
 import 'screens/admin/screens/stock_management_screen.dart';
 import 'services/socket_service.dart';
 import 'services/audio_notification_service.dart';
+import 'services/fcm_service.dart';
 import 'models/user_session.dart';
 import 'theme/app_theme.dart';
 import 'theme/admin_tokens.dart';
@@ -446,6 +447,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         setState(() {
           _isLoggedIn = true;
         });
+        // I-register ang device bilang staff para may FCM push alerts kahit
+        // naka-background o patay ang app.
+        if (token != null && token.toString().isNotEmpty) {
+          unawaited(FcmService.registerAsStaff(authToken: token.toString()));
+        }
         _loadDashboardData();
         _initSocketSync();
 
@@ -510,6 +516,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             onPressed: () {
               Navigator.pop(ctx);
               _socketService.disconnect();
+              unawaited(FcmService.unregisterAsStaff());
               UserSession.clearSession();
               AdminService.staffAuthToken = null;
               _orderIdsSeeded = false;
