@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'admin_dashboard_screen.dart';
 import 'services/audio_notification_service.dart';
+import 'services/fcm_service.dart';
 import 'services/notification_center.dart';
 import 'theme/app_theme.dart';
 
@@ -12,8 +15,9 @@ Future<void> main() async {
   } catch (_) {}
 
   // In-app banner/system notification infra para sa admin bill alerts.
-  await AudioNotificationService.initializeLocalNotifications();
-  await AudioNotificationService.requestNotificationPermission();
+  unawaited(AudioNotificationService.requestNotificationPermission());
+  unawaited(AudioNotificationService.initializeLocalNotifications());
+  unawaited(FcmService.init());
   WidgetsBinding.instance.addObserver(NotificationLifecycleObserver());
 
   runApp(const BalaiAdminApp());
