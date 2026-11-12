@@ -180,27 +180,17 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
 
   void _goToMenu() {
     final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
-    final NavigatorState nav = Navigator.of(context);
-    bool foundMenu = false;
-    nav.popUntil((route) {
-      if (route.settings.name == 'menu') {
-        foundMenu = true;
-        return true;
-      }
-      return route.isFirst;
-    });
-    if (!foundMenu) {
-      nav.push(
-        MaterialPageRoute(
-          builder: (context) => MenuScreen(
-            tableId: tableNum,
-            tableNumber: tableNum,
-            isAdditionalOrder: UserSession.isAdditionalOrder,
-          ),
-          settings: const RouteSettings(name: 'menu'),
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (context) => MenuScreen(
+          tableId: tableNum,
+          tableNumber: tableNum,
+          isAdditionalOrder: UserSession.isAdditionalOrder,
         ),
-      );
-    }
+        settings: const RouteSettings(name: 'menu'),
+      ),
+      (route) => false,
+    );
   }
 
   /// Back button: bumalik sa pinanggalingan (Order Type Selection o Menu),

@@ -567,27 +567,28 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         UserSession.activeTableId ??
         UserSession.activeTableNumber ??
         7;
-    final NavigatorState nav = Navigator.of(context);
-    bool foundMenu = false;
-    nav.popUntil((route) {
-      if (route.settings.name == 'menu') {
-        foundMenu = true;
-        return true;
-      }
-      return route.isFirst;
-    });
-    if (!foundMenu) {
-      nav.push(
-        MaterialPageRoute(
-          builder: (context) => MenuScreen(
-            tableId: tableNum,
-            tableNumber: tableNum,
-            isAdditionalOrder:
-                widget.isAdditionalOrder || UserSession.isAdditionalOrder,
-          ),
-          settings: const RouteSettings(name: 'menu'),
+    // Simpleng reset papuntang Menu. Mas reliable ito kaysa popUntil+push
+    // lalo na kapag galing sa pushAndRemoveUntil pagkatapos mag-place ng order.
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (context) => MenuScreen(
+          tableId: tableNum,
+          tableNumber: tableNum,
+          isAdditionalOrder:
+              widget.isAdditionalOrder || UserSession.isAdditionalOrder,
         ),
-      );
+        settings: const RouteSettings(name: 'menu'),
+      ),
+      (route) => false,
+    );
+  }
+
+  void _goBack() {
+    final NavigatorState nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+    } else {
+      _navigateToMenu();
     }
   }
 
@@ -762,7 +763,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           InkWell(
-            onTap: _navigateToMenu,
+            onTap: _goBack,
             borderRadius: BorderRadius.circular(22),
             child: Container(
               width: 44,
