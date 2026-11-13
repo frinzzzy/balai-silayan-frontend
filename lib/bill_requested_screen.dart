@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
 import 'user_session.dart';
 import '../widgets/customer_bottom_nav.dart';
 import 'services/global_socket_listener.dart';
+import 'services/customer_navigation.dart';
 import 'config/api_config.dart';
 
 class BillRequestedScreen extends StatefulWidget {
@@ -180,16 +180,11 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
 
   void _goToMenu() {
     final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 1;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (context) => MenuScreen(
-          tableId: tableNum,
-          tableNumber: tableNum,
-          isAdditionalOrder: UserSession.isAdditionalOrder,
-        ),
-        settings: const RouteSettings(name: 'menu'),
-      ),
-      (route) => false,
+    CustomerNavigation.openMenu(
+      context,
+      tableId: tableNum,
+      tableNumber: tableNum,
+      isAdditionalOrder: UserSession.isAdditionalOrder,
     );
   }
 

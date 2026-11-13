@@ -3,7 +3,6 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 
-import 'menu_screen.dart';
 import 'session_bill_screen.dart';
 import '../widgets/customer_bottom_nav.dart';
 import '../widgets/finished_order_dialog.dart';
@@ -14,6 +13,7 @@ import 'services/socket_service.dart';
 import 'services/order_context.dart';
 import 'services/order_event_bus.dart';
 import 'services/order_event_router.dart';
+import 'services/customer_navigation.dart';
 import 'config/api_config.dart';
 
 class OrderStatusScreen extends StatefulWidget {
@@ -574,19 +574,15 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         UserSession.activeTableId ??
         UserSession.activeTableNumber ??
         7;
-    // Simpleng reset papuntang Menu. Mas reliable ito kaysa popUntil+push
-    // lalo na kapag galing sa pushAndRemoveUntil pagkatapos mag-place ng order.
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (context) => MenuScreen(
-          tableId: tableNum,
-          tableNumber: tableNum,
-          isAdditionalOrder:
-              widget.isAdditionalOrder || UserSession.isAdditionalOrder,
-        ),
-        settings: const RouteSettings(name: 'menu'),
-      ),
-      (route) => false,
+    // Kung may existing Menu sa stack, bumalik doon para hindi mawala ang
+    // cart at iba pang state. Kung wala, gagawa ng bagong Menu na nagre-restore
+    // ng naka-save na cart.
+    CustomerNavigation.openMenu(
+      context,
+      tableId: tableNum,
+      tableNumber: tableNum,
+      isAdditionalOrder:
+          widget.isAdditionalOrder || UserSession.isAdditionalOrder,
     );
   }
 

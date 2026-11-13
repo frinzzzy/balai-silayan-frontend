@@ -431,9 +431,11 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
         UserSession.targetParentOrderId = null;
         UserSession.lastPlacedOrderId = null;
         UserSession.firstOrderId = null;
+        UserSession.autoAdditionalParentId = null;
       } else {
         UserSession.isAdditionalOrder = true;
         UserSession.targetParentOrderId = rawParentId?.toString();
+        UserSession.autoAdditionalParentId = rawParentId?.toString();
       }
     } else {
       UserSession.isAdditionalOrder = false;
@@ -524,6 +526,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
       UserSession.isAdditionalOrder = false;
       UserSession.targetParentOrderId = null;
       UserSession.lastPlacedOrderId = null;
+      UserSession.autoAdditionalParentId = null;
     }
 
     if (!mounted) return;
@@ -535,6 +538,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
           tableId: _resolvedTableId ?? widget.tableId,
           tableNumber: _resolvedTableNumber ?? widget.tableNumber,
           isAdditionalOrder: isAdditional,
+          resetOrderContext: !isAdditional,
         ),
         settings: const RouteSettings(name: 'menu'),
       ),

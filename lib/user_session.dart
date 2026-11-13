@@ -12,6 +12,11 @@ class UserSession {
   static String? targetParentOrderId;
   static dynamic firstOrderId;
   static dynamic lastPlacedOrderId;
+
+  /// Ticket na awtomatikong pagdadagdag-an habang nananatili ang customer sa
+  /// Menu pagkatapos mag-place ng order. Null kapag walang active ticket o
+  /// kapag sadyang nag-start ng brand-new order.
+  static dynamic autoAdditionalParentId;
   static double lastPlacedOrderTotal = 0.0;
   static List<dynamic> lastPlacedOrderItems = [];
 
@@ -144,6 +149,7 @@ class UserSession {
     targetParentOrderId = null;
     firstOrderId = null;
     lastPlacedOrderId = null;
+    autoAdditionalParentId = null;
     lastPlacedOrderTotal = 0.0;
     lastPlacedOrderItems = [];
   }

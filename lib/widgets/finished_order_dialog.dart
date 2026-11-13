@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../menu_screen.dart';
 import '../user_session.dart';
+import '../services/customer_navigation.dart';
 import '../services/notification_center.dart';
 import '../services/order_context.dart';
 import '../services/audio_notification_service.dart';
@@ -140,14 +140,9 @@ class FinishedOrderDialog {
     required String orderCode,
     bool showSessionClosedBanner = true,
   }) {
-    // ⚠️ Huwag i-clear ang buong session — may iba pang active tickets ang table.
-    UserSession.isAdditionalOrder = false;
-    UserSession.targetParentOrderId = null;
-    OrderContext.instance.reset();
-
     if (showSessionClosedBanner) {
       // Ipinapakita ang session-closed notif (lalo na sa additional-order case
-      // na naging parent ang na-finished na ticket) bago bumalik sa order choices.
+      // na naging parent ang na-finished na ticket) bago i-reset ang flags.
       AudioNotificationService.showSessionClosedBanner(
         orderCode: orderCode,
         orderId: UserSession.lastPlacedOrderId,
@@ -156,22 +151,28 @@ class FinishedOrderDialog {
       );
     }
 
+    // ⚠️ Huwag i-clear ang buong session — may iba pang active tickets ang table.
+    // I-reset lang ang additional-order context para ang susunod na order ay
+    // malinis na bagong order, at hindi na mag-auto-additional sa finished
+    // o declined ticket.
+    UserSession.isAdditionalOrder = false;
+    UserSession.targetParentOrderId = null;
+    UserSession.autoAdditionalParentId = null;
+    UserSession.lastPlacedOrderId = null;
+    OrderContext.instance.reset();
+
     final int tableNumber =
         UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
-    final NavigatorState? navigator = NotificationCenter.navigatorKey.currentState;
-    if (navigator == null) return;
+    final BuildContext? rootContext =
+        NotificationCenter.navigatorKey.currentContext;
+    if (rootContext == null) return;
 
-    // `(route) => false` — bumalik sa OrderTypeSelectionScreen (walang luma na
-    // na-navigate mula sa OrderStatusScreen).
-    navigator.pushAndRemoveUntil(
-      MaterialPageRoute<void>(
-        builder: (_) => MenuScreen(
-          tableId: tableNumber,
-          tableNumber: tableNumber,
-          isAdditionalOrder: false,
-        ),
-      ),
-      (route) => false,
+    CustomerNavigation.openMenu(
+      rootContext,
+      tableId: tableNumber,
+      tableNumber: tableNumber,
+      isAdditionalOrder: false,
+      resetOrderContext: true,
     );
   }
 }

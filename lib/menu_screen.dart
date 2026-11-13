@@ -16,6 +16,8 @@ import 'services/socket_service.dart';
 import 'services/order_context.dart';
 import 'services/order_event_bus.dart';
 import 'services/order_event_router.dart';
+import 'services/customer_cart_store.dart';
+import 'services/ordering_gate.dart';
 import 'config/api_config.dart';
 
 class FoodItem {
@@ -150,6 +152,16 @@ class FoodItem {
       imageUrl: (dbImg != null && dbImg.isNotEmpty && !dbImg.startsWith('http')) ? dbImg : fallbackImg,
     );
   }
+
+  /// Parehong menu item = parehong cart line, kahit muling nabuo ang object
+  /// mula sa `CustomerCartStore` (hal. pag-restore pagkatapos gumawa ng bagong
+  /// MenuScreen).
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || (other is FoodItem && other.itemDbId == itemDbId);
+
+  @override
+  int get hashCode => itemDbId.hashCode;
 }
 
 class MenuCategory {
@@ -171,11 +183,20 @@ class MenuScreen extends StatefulWidget {
   final int? tableNumber;
   final bool isAdditionalOrder;
 
+  /// Kapag `true`, sadyang nagsimula ng brand-new order ang customer (mula sa
+  /// Order Type Selection). Nililinis nito ang dating additional-order flags.
+  ///
+  /// Kapag `false` (default), pinapanatili ang kasalukuyang order context at
+  /// awtomatikong nagiging additional ang susunod na order kung may active
+  /// ticket pa (`UserSession.autoAdditionalParentId`).
+  final bool resetOrderContext;
+
   const MenuScreen({
     super.key,
     this.tableId,
     this.tableNumber,
     this.isAdditionalOrder = false,
+    this.resetOrderContext = false,
   });
 
   @override
@@ -218,6 +239,25 @@ class _MenuScreenState extends State<MenuScreen> {
   bool _pollInFlight = false;
   bool _popScopeCanPop = true;
 
+  /// Additional ba ang kasalukuyang order flow? Kasama ang auto-additional na
+  /// naka-set pagkatapos mag-place ng order habang nasa Menu pa lang.
+  bool get _effectiveAdditional {
+    if (UserSession.autoAdditionalParentId != null) return true;
+    if (_forceNewOrderMode) return false;
+    return widget.isAdditionalOrder || UserSession.isAdditionalOrder;
+  }
+
+  /// Naka-set kapag pinili ng customer ang "Continue as New Order" matapos
+  /// ma-block ang additional order (hal. PREPARING na ang parent).
+  bool _forceNewOrderMode = false;
+
+  /// Ticket na pagdadagdag-an / iko-consider para sa bill at status gate.
+  dynamic get _activeParentOrderId =>
+      UserSession.targetParentOrderId ??
+      UserSession.autoAdditionalParentId ??
+      UserSession.lastPlacedOrderId ??
+      UserSession.firstOrderId;
+
   /// Huling nakita na status per order (polling fallback detection).
   final Map<String, String> _polledOrderStatuses = <String, String>{};
 
@@ -245,15 +285,39 @@ class _MenuScreenState extends State<MenuScreen> {
       _chosenTableNumber = UserSession.activeTableId;
     }
 
-    UserSession.isAdditionalOrder = widget.isAdditionalOrder;
+    // Initialisahin ang order context ayon sa pinanggalingan ng Menu.
+    if (widget.resetOrderContext) {
+      // Sadyang brand-new order (mula sa Order Type Selection).
+      UserSession.isAdditionalOrder = widget.isAdditionalOrder;
+      if (!widget.isAdditionalOrder) {
+        UserSession.targetParentOrderId = null;
+        UserSession.lastPlacedOrderId = null;
+        UserSession.autoAdditionalParentId = null;
+      }
+    } else {
+      final dynamic autoParent = UserSession.autoAdditionalParentId;
+      final bool autoAdditional = !widget.isAdditionalOrder &&
+          autoParent != null &&
+          autoParent.toString().isNotEmpty;
+      if (autoAdditional) {
+        // Nanatili ang customer sa Menu pagkatapos mag-order — ituring na
+        // additional ang susunod na order sa parehong ticket.
+        UserSession.isAdditionalOrder = true;
+        UserSession.targetParentOrderId = autoParent.toString();
+      } else {
+        UserSession.isAdditionalOrder = widget.isAdditionalOrder ||
+            (UserSession.isAdditionalOrder &&
+                UserSession.targetParentOrderId != null);
+      }
+    }
+
     GlobalSocketListener.instance.registerTableIdentity(
       tableId: widget.tableId,
       tableNumber: widget.tableNumber ?? _chosenTableNumber,
     );
-    if (!widget.isAdditionalOrder) {
-      UserSession.targetParentOrderId = null;
-      UserSession.lastPlacedOrderId = null;
-    }
+
+    _restoreCartFromStore();
+    CustomerCartStore.revision.addListener(_onCartStoreChanged);
 
     _fetchDatabaseCategories();
     _fetchLiveDatabaseMenu();
@@ -278,29 +342,58 @@ class _MenuScreenState extends State<MenuScreen> {
 
     // Tukuyin ang order context ng screen na ito para tama ang pop-up policy.
     _contextToken = OrderContext.instance.enter(
-      mode: widget.isAdditionalOrder || UserSession.isAdditionalOrder
+      mode: _effectiveAdditional
           ? CustomerOrderMode.additionalOrder
           : CustomerOrderMode.newOrder,
       activeOrderId: UserSession.lastPlacedOrderId,
-      linkedParentId: UserSession.targetParentOrderId,
+      linkedParentId: UserSession.targetParentOrderId ??
+          UserSession.autoAdditionalParentId,
     );
 
     // Bagong pasok sa additional-order flow: i-reset ang popup dedupe ng
     // parent at sariling order para hindi barado ng lumang key ang susunod
     // na finished/declined update.
-    if (widget.isAdditionalOrder || UserSession.isAdditionalOrder) {
+    if (_effectiveAdditional) {
       OrderEventRouter.instance.resetPopupDedupe(UserSession.targetParentOrderId);
+      OrderEventRouter.instance.resetPopupDedupe(UserSession.autoAdditionalParentId);
       OrderEventRouter.instance.resetPopupDedupe(UserSession.lastPlacedOrderId);
     }
   }
 
-  bool _isCurrentTicketBillLocked() {
-    if (!(widget.isAdditionalOrder || UserSession.isAdditionalOrder)) {
-      return false;
+  void _restoreCartFromStore() {
+    _orderCart.clear();
+    for (final CartLine line in CustomerCartStore.restore()) {
+      final FoodItem item = FoodItem(
+        itemDbId: line.itemDbId,
+        name: line.name,
+        price: line.price,
+        categoryId: line.categoryId,
+        isAvailable: line.isAvailable,
+        imageUrl: line.imageUrl,
+      );
+      _orderCart[item] = line.quantity;
     }
-    final dynamic parentId =
-        UserSession.targetParentOrderId ?? UserSession.lastPlacedOrderId;
-    return UserSession.isTicketBillRequested(parentId);
+  }
+
+  void _persistCart() {
+    CustomerCartStore.save(
+      _orderCart.entries.map(
+        (entry) => CartLine(
+          itemDbId: entry.key.itemDbId,
+          name: entry.key.name,
+          price: entry.key.price,
+          categoryId: entry.key.categoryId,
+          isAvailable: entry.key.isAvailable,
+          imageUrl: entry.key.imageUrl,
+          quantity: entry.value,
+        ),
+      ),
+    );
+  }
+
+  void _onCartStoreChanged() {
+    if (!mounted) return;
+    setState(_restoreCartFromStore);
   }
 
   Future<void> _fetchBillLockState() async {
@@ -363,7 +456,10 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   Future<void> _openCartScreen() async {
-    if (!await _ensureOrderingNotLocked()) return;
+    // Kung may laman ang cart, i-check ang gating bago payagang magpatuloy.
+    // Kung wala, papayagan pa ring buksan ang Cart para makita ang active
+    // tickets — kahit PREPARING na ang parent.
+    if (_orderCart.isNotEmpty && !await _ensureCanAddItems()) return;
     if (!mounted) return;
     final updatedCart = await Navigator.push<Map<FoodItem, int>>(
       context,
@@ -373,7 +469,7 @@ class _MenuScreenState extends State<MenuScreen> {
           total: _cartGrandTotal,
           tableId: _chosenTableNumber,
           isTakeout: _isTakeoutSelected,
-          isAdditionalOrder: widget.isAdditionalOrder,
+          isAdditionalOrder: _effectiveAdditional,
         ),
       ),
     );
@@ -383,6 +479,7 @@ class _MenuScreenState extends State<MenuScreen> {
         _orderCart.clear();
         _orderCart.addAll(updatedCart);
       });
+      _persistCart();
     }
   }
 
@@ -395,9 +492,46 @@ class _MenuScreenState extends State<MenuScreen> {
     });
   }
 
-  Future<bool> _ensureOrderingNotLocked() async {
-    if (!_isCurrentTicketBillLocked()) return true;
+  /// Pareho sa Order Type Selection ang gating bago magdagdag ng items:
+  /// bill-requested at blocked ticket statuses.
+  Future<bool> _ensureCanAddItems() async {
+    if (!_effectiveAdditional) return true;
 
+    final int tableId = _chosenTableNumber ??
+        UserSession.activeTableNumber ??
+        UserSession.activeTableId ??
+        7;
+    final dynamic parentId = _activeParentOrderId;
+    if (parentId == null || parentId.toString().trim().isEmpty) return true;
+
+    final OrderingGateResult result = await OrderingGate.evaluate(
+      tableId: tableId,
+      parentOrderId: parentId,
+    );
+
+    if (!mounted || result.allowed) return true;
+
+    if (result.isBillLocked) {
+      await _showBillLockedDialog();
+      return false;
+    }
+
+    if (result.isStatusBlocked) {
+      final bool? proceed = await _showAdditionalOrderTransitionDialog(
+        orderId: parentId,
+        status: result.ticketStatus ?? 'PREPARING',
+      );
+      if (proceed == true) {
+        _switchToNewOrderMode();
+        return true;
+      }
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _showBillLockedDialog() async {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -419,7 +553,73 @@ class _MenuScreenState extends State<MenuScreen> {
         ],
       ),
     );
-    return false;
+  }
+
+  Future<bool?> _showAdditionalOrderTransitionDialog({
+    required dynamic orderId,
+    required String status,
+  }) {
+    final String orderCode = UserSession.formatOrderCode(orderId);
+    return showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFFFFFDFA),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          title: const Text(
+            'Additional Order Not Allowed',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF203F35),
+            ),
+          ),
+          content: Text(
+            'Order #$orderCode is currently $status, so it can no longer accept additional items. '
+            'If you continue, your items will be placed as a NEW order instead.\n\n'
+            'Are you sure you want to continue?',
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color(0xFF788078),
+              height: 1.4,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF788078)),
+              ),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF203F35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text(
+                'Continue as New Order',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _switchToNewOrderMode() {
+    UserSession.isAdditionalOrder = false;
+    UserSession.targetParentOrderId = null;
+    UserSession.autoAdditionalParentId = null;
+    UserSession.firstOrderId = null;
+    _forceNewOrderMode = true;
+    OrderingGate.invalidate();
+    if (mounted) setState(() {});
   }
 
   void _handleTableOrderEvent(dynamic data) {
@@ -472,7 +672,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
       final dynamic eventOrderId = orderPayload['order_id'] ?? orderPayload['id'] ?? data['order_id'] ?? data['id'];
 
-      final bool isAdd = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
+      final bool isAdd = _effectiveAdditional;
       final dynamic targetId = isAdd
           ? UserSession.targetParentOrderId
           : UserSession.lastPlacedOrderId;
@@ -530,6 +730,7 @@ class _MenuScreenState extends State<MenuScreen> {
   @override
   void dispose() {
     MenuCartIntent.openCart.removeListener(_handleOpenCartIntent);
+    CustomerCartStore.revision.removeListener(_onCartStoreChanged);
     _heartbeatTimer?.cancel();
     _statusPollTimer?.cancel();
     if (_refreshToken != null) {
@@ -693,6 +894,12 @@ class _MenuScreenState extends State<MenuScreen> {
     });
   }
 
+  Future<void> _handleQuantityTap(FoodItem item, int variance) async {
+    if (variance > 0 && !await _ensureCanAddItems()) return;
+    if (!mounted) return;
+    _modifyQuantity(item, variance);
+  }
+
   void _modifyQuantity(FoodItem item, int variance) {
     setState(() {
       int activeQty = _orderCart[item] ?? 0;
@@ -702,6 +909,7 @@ class _MenuScreenState extends State<MenuScreen> {
         _orderCart[item] = activeQty + variance;
       }
     });
+    _persistCart();
   }
 
   double get _cartGrandTotal => _orderCart.entries.fold(0.0, (total, entry) => total + (entry.key.price * entry.value));
@@ -1021,7 +1229,7 @@ class _MenuScreenState extends State<MenuScreen> {
                   foodItem: foodItem,
                   tableId: _chosenTableNumber,
                   isTakeout: _isTakeoutSelected,
-                  onAddToCart: (item, qty, addOns) => _modifyQuantity(item, qty),
+                  onAddToCart: (item, qty, addOns) => _handleQuantityTap(item, qty),
                 ),
               ),
             );
@@ -1059,7 +1267,7 @@ class _MenuScreenState extends State<MenuScreen> {
                           alignment: Alignment.centerRight,
                           child: productCount == 0
                               ? InkWell(
-                                  onTap: () => _modifyQuantity(foodItem, 1),
+                                  onTap: () => _handleQuantityTap(foodItem, 1),
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                     decoration: BoxDecoration(color: const Color(0xFF203F35), borderRadius: BorderRadius.circular(10)),
@@ -1071,7 +1279,7 @@ class _MenuScreenState extends State<MenuScreen> {
                                   children: [
                                     IconButton(icon: const Icon(Icons.remove, size: 14), onPressed: () => _modifyQuantity(foodItem, -1)),
                                     Text('$productCount', style: const TextStyle(fontWeight: FontWeight.bold)),
-                                    IconButton(icon: const Icon(Icons.add, size: 14), onPressed: () => _modifyQuantity(foodItem, 1)),
+                                    IconButton(icon: const Icon(Icons.add, size: 14), onPressed: () => _handleQuantityTap(foodItem, 1)),
                                   ],
                                 ),
                         ),
@@ -1117,7 +1325,7 @@ class _MenuScreenState extends State<MenuScreen> {
           onCart: _openCartScreen,
           onLiveStatus: () {
             final dynamic activeLiveOrderId = UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId ?? UserSession.firstOrderId;
-            Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: activeLiveOrderId, isTakeout: _isTakeoutSelected, tableId: _chosenTableNumber, isAdditionalOrder: widget.isAdditionalOrder)));
+            Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: activeLiveOrderId, isTakeout: _isTakeoutSelected, tableId: _chosenTableNumber, isAdditionalOrder: _effectiveAdditional)));
           },
           onBill: () async {
             await Navigator.push(context, MaterialPageRoute(builder: (context) => SessionBillScreen(tableId: _chosenTableNumber, isTakeout: _isTakeoutSelected)));

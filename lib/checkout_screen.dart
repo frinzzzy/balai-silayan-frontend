@@ -9,6 +9,8 @@ import 'menu_screen.dart';
 import 'user_session.dart';
 import 'services/order_context.dart';
 import 'services/socket_service.dart';
+import 'services/customer_cart_store.dart';
+import 'services/ordering_gate.dart';
 import 'config/api_config.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -613,6 +615,22 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         activeOrderId: sanitizedOrderId,
       );
     }
+
+    // Kapag nanatili ang customer sa Menu pagkatapos mag-order, awtomatikong
+    // additional na ang susunod na order sa parehong active ticket.
+    final dynamic autoParent = hasParent ? linkedParent : generatedOrderId;
+    if (autoParent != null && autoParent.toString().trim().isNotEmpty) {
+      UserSession.autoAdditionalParentId = autoParent;
+      if (UserSession.targetParentOrderId == null ||
+          UserSession.targetParentOrderId!.trim().isEmpty) {
+        UserSession.targetParentOrderId = autoParent.toString();
+      }
+    }
+
+    // Naipadala na sa kitchen ang laman ng cart — huwag nang iwanan sa
+    // store/Menu para hindi ito maipadala muli.
+    CustomerCartStore.clear();
+    OrderingGate.invalidate();
 
     try {
       final socketService = SocketService();

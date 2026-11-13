@@ -5,12 +5,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show ImageFilter;
 
-import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
 import 'services/global_socket_listener.dart';
 import 'services/order_context.dart';
 import 'services/order_event_bus.dart';
+import 'services/customer_navigation.dart';
 import 'bill_requested_screen.dart';
 import 'user_session.dart';
 import '../widgets/customer_bottom_nav.dart';
@@ -717,16 +717,11 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         UserSession.activeTableId ??
         UserSession.activeTableNumber ??
         7;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (context) => MenuScreen(
-          tableId: tableNum,
-          tableNumber: tableNum,
-          isAdditionalOrder: UserSession.isAdditionalOrder,
-        ),
-        settings: const RouteSettings(name: 'menu'),
-      ),
-      (route) => false,
+    CustomerNavigation.openMenu(
+      context,
+      tableId: tableNum,
+      tableNumber: tableNum,
+      isAdditionalOrder: UserSession.isAdditionalOrder,
     );
   }
 
