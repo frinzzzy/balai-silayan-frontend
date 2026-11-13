@@ -87,6 +87,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   bool _isLoading = true;
   bool _isRequestingBill = false;
   bool _isWakingServer = false;
+  bool _popScopeCanPop = true;
   String? _billRequestedAt;
   String? _errorMessage;
 
@@ -101,6 +102,12 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
   int? _contextToken;
 
   String get _baseUrl => ApiConfig.baseUrl;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _popScopeCanPop = Navigator.of(context).canPop();
+  }
 
   @override
   void initState() {
@@ -734,9 +741,20 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
     final bool hasSelectedOrders = _sessionOrders.any(
         (order) => order['isSelected'] == true && order['isRequested'] != true);
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F4EC),
-      body: SafeArea(
+    return PopScope(
+      canPop: _popScopeCanPop,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        final NavigatorState nav = Navigator.of(context);
+        if (nav.canPop()) {
+          nav.pop();
+          return;
+        }
+        _goToMenu();
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF8F4EC),
+        body: SafeArea(
         child: Column(
           children: [
             _buildRestaurantHeader(),
@@ -860,6 +878,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
         ),
       ),
       bottomNavigationBar: _buildCustomerBottomNav(tableNum),
+      ),
     );
   }
 

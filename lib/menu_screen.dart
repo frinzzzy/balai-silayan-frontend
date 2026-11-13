@@ -216,9 +216,16 @@ class _MenuScreenState extends State<MenuScreen> {
   int? _refreshToken;
   int? _contextToken;
   bool _pollInFlight = false;
+  bool _popScopeCanPop = true;
 
   /// Huling nakita na status per order (polling fallback detection).
   final Map<String, String> _polledOrderStatuses = <String, String>{};
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _popScopeCanPop = Navigator.of(context).canPop();
+  }
 
   @override
   void initState() {
@@ -710,15 +717,33 @@ class _MenuScreenState extends State<MenuScreen> {
       return matchesCategory && matchesSearch;
     }).toList();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F4EC),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildRestaurantHeader(),
-            _buildTableContextStrip(),
-            Expanded(
-              child: _isLoading
+    return PopScope(
+      canPop: _popScopeCanPop,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        final NavigatorState nav = Navigator.of(context);
+        if (nav.canPop()) {
+          nav.pop();
+          return;
+        }
+        nav.pushReplacement(
+          MaterialPageRoute(
+            builder: (ctx) => OrderTypeSelectionScreen(
+              tableNumber: _chosenTableNumber ?? 7,
+              tableId: _chosenTableNumber ?? 7,
+            ),
+          ),
+        );
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF8F4EC),
+        body: SafeArea(
+          child: Column(
+            children: [
+              _buildRestaurantHeader(),
+              _buildTableContextStrip(),
+              Expanded(
+                child: _isLoading
                   ? const Center(child: CircularProgressIndicator(color: Color(0xFF203F35)))
                   : SingleChildScrollView(
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
@@ -742,6 +767,7 @@ class _MenuScreenState extends State<MenuScreen> {
         ),
       ),
       bottomNavigationBar: _buildCustomerBottomNav(),
+      ),
     );
   }
 

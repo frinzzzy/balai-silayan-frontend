@@ -47,11 +47,18 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
   int? _refreshToken;
   int? _contextToken;
   bool _fetchInFlight = false;
+  bool _popScopeCanPop = true;
 
   bool _isLoadingBill = false;
   int _ticketCount = 0;
   int _requestedTicketCount = 0;
   double _billTotal = 0.0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _popScopeCanPop = Navigator.of(context).canPop();
+  }
 
   @override
   void initState() {
@@ -625,12 +632,27 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F4EC),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
+    return PopScope(
+      canPop: _popScopeCanPop,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        final NavigatorState nav = Navigator.of(context);
+        if (nav.canPop()) {
+          nav.pop();
+          return;
+        }
+        nav.pushReplacement(
+          MaterialPageRoute(
+            builder: (ctx) => const QrScannerScreen(),
+          ),
+        );
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF8F4EC),
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: 24.0,
                 vertical: 12.0,
@@ -660,6 +682,7 @@ class _OrderTypeSelectionScreenState extends State<OrderTypeSelectionScreen> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

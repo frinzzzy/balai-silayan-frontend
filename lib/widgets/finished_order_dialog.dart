@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../order_type_selection_screen.dart';
+import '../menu_screen.dart';
 import '../user_session.dart';
 import '../services/notification_center.dart';
 import '../services/order_context.dart';
@@ -165,9 +165,10 @@ class FinishedOrderDialog {
     // na-navigate mula sa OrderStatusScreen).
     navigator.pushAndRemoveUntil(
       MaterialPageRoute<void>(
-        builder: (_) => OrderTypeSelectionScreen(
+        builder: (_) => MenuScreen(
           tableId: tableNumber,
           tableNumber: tableNumber,
+          isAdditionalOrder: false,
         ),
       ),
       (route) => false,

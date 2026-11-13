@@ -50,6 +50,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   bool _hasActiveOrder = true;
   bool _sessionWasClosed = false;
   bool _billRequested = false;
+  bool _popScopeCanPop = true;
 
   static const Set<String> _terminalBillStatuses = <String>{
     'PAID',
@@ -95,6 +96,12 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   }
 
   String get _baseUrl => ApiConfig.baseUrl;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _popScopeCanPop = Navigator.of(context).canPop();
+  }
 
   @override
   void initState() {
@@ -606,15 +613,21 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         ? _fetchedOrderCode
         : _formatOrderCode(widget.orderId);
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F4EC),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildRestaurantHeader(),
-            _buildTableContextStrip(tableString),
-            Expanded(
-              child: _isLoadingLiveOrder
+    return PopScope(
+      canPop: _popScopeCanPop,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        _goBack();
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF8F4EC),
+        body: SafeArea(
+          child: Column(
+            children: [
+              _buildRestaurantHeader(),
+              _buildTableContextStrip(tableString),
+              Expanded(
+                child: _isLoadingLiveOrder
                   ? const Center(
                 child: CircularProgressIndicator(
                   color: Color(0xFF203F35),
@@ -665,6 +678,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
             ),
           );
         },
+      ),
       ),
     );
   }
