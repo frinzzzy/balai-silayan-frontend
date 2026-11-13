@@ -41,7 +41,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
           ? cleanVal
           : '${ApiConfig.baseUrl}/api/session/scan/$cleanVal');
 
-      final response = await http.get(scanUri);
+      final response = await http.get(scanUri).timeout(
+            const Duration(seconds: 30),
+          );
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
@@ -78,11 +80,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
             ),
           );
         }
-      } else {
-        await _handleManualFallback(cleanVal);
       }
+      // Hindi na fallback sa manual entry kapag invalid QR / server error.
+      // Ang backend ang source of truth; huwag basta kina-accept ang scan.
     } catch (_) {
-      await _handleManualFallback(scannedValue);
+      // Network / server cold-start / timeout: mag-wait at mag-retry sa susunod
+      // na valid scan; huwag agad mag-manipulate ng invalid QR.
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
@@ -156,7 +159,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
               final val = tableController.text.trim();
               if (val.isNotEmpty) {
                 Navigator.pop(ctx);
-                _handleScan(val);
+                _handleManualFallback(val);
               }
             },
             child: const Text('Continue', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
