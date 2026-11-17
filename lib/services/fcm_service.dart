@@ -29,6 +29,34 @@ Future<void> fcmBackgroundMessageHandler(RemoteMessage message) async {
     ),
   );
 
+  // Gawin agad ang channel na may custom sound (Android only; null elsewhere).
+  final AndroidFlutterLocalNotificationsPlugin? android =
+      plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+  await android?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      'balai_silayan_orders_v2',
+      'Balai Silayan Order Alerts',
+      description: 'Balai Silayan order status alerts',
+      importance: Importance.high,
+      playSound: true,
+      sound: RawResourceAndroidNotificationSound('notification_ring'),
+      enableVibration: true,
+    ),
+  );
+  // Compatibility sa backend na naka-target pa sa lumang channel id.
+  await android?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      'balai_silayan_orders',
+      'Balai Silayan Order Alerts (legacy)',
+      description: 'Compatibility channel para sa FCM push alerts',
+      importance: Importance.high,
+      playSound: true,
+      sound: RawResourceAndroidNotificationSound('notification_ring'),
+      enableVibration: true,
+    ),
+  );
+
   final String title =
       message.data['title']?.toString() ?? 'Balai Silayan';
   final String body = message.data['body']?.toString() ?? '';
@@ -39,12 +67,16 @@ Future<void> fcmBackgroundMessageHandler(RemoteMessage message) async {
     body: body,
     notificationDetails: const NotificationDetails(
       android: AndroidNotificationDetails(
-        'balai_silayan_orders',
+        // Dapat pareho sa AudioNotificationService.orderNotificationChannelId
+        // at sa AndroidManifest default channel. Versioned (v2) dahil
+        // naka-lock ang sound ng channel pagkatapos ma-create sa device.
+        'balai_silayan_orders_v2',
         'Balai Silayan Order Alerts',
         channelDescription: 'Balai Silayan order status alerts',
         importance: Importance.high,
         priority: Priority.high,
         playSound: true,
+        sound: RawResourceAndroidNotificationSound('notification_ring'),
         enableVibration: true,
         icon: 'ic_stat_balai',
       ),

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// Tabs ng consistent na customer bottom navigation.
-enum CustomerNavTab { menu, cart, liveStatus, bill }
+enum CustomerNavTab { menu, cart, liveStatus, bill, help }
 
 /// Intent flag para sa Cart tab mula sa ibang screen (Bill/Live Status).
 ///

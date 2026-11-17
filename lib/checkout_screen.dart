@@ -12,10 +12,17 @@ import 'services/socket_service.dart';
 import 'services/customer_cart_store.dart';
 import 'services/ordering_gate.dart';
 import 'config/api_config.dart';
+import 'utils/currency.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final Map<FoodItem, int> cart;
+
+  /// Total ng NEW items lang sa order na ito.
   final double total;
+
+  /// Total ng existing active tickets (para sa breakdown sa additional order).
+  final double existingTicketsTotal;
+
   final int? tableId;
   final bool isTakeout;
   final bool isAdditionalOrder;
@@ -24,6 +31,7 @@ class CheckoutScreen extends StatefulWidget {
     super.key,
     required this.cart,
     required this.total,
+    this.existingTicketsTotal = 0.0,
     this.tableId = 7,
     required this.isTakeout,
     this.isAdditionalOrder = false,
@@ -37,6 +45,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   bool _isSubmitting = false;
   late Map<FoodItem, int> _editableCart;
   late double _calculatedTotal;
+  late final String _orderNotes;
 
   String get _baseUrl => ApiConfig.baseUrl;
 
@@ -45,6 +54,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     super.initState();
     _editableCart = Map.from(widget.cart);
     _calculatedTotal = _calculateCartTotal();
+    _orderNotes = CustomerCartStore.specialInstructions;
   }
 
   String _generateUuidV4() {
@@ -77,10 +87,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     return sum;
   }
 
+  /// Tinatawag mula sa loob ng `setState`; hindi na ito nagse-set ng sarili.
   void _recalculatePipeline() {
-    setState(() {
-      _calculatedTotal = _calculateCartTotal();
-    });
+    _calculatedTotal = _calculateCartTotal();
   }
 
   void _updateQuantity(FoodItem item, int variance) {
@@ -101,6 +110,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         const SnackBar(
           content: Text('Your basket is empty. Please select food items first.'),
           backgroundColor: Color(0xFF8E5136),
+        ),
+      );
+      return;
+    }
+
+    final List<FoodItem> unavailable = _editableCart.keys
+        .where((FoodItem item) => !item.isAvailable)
+        .toList(growable: false);
+    if (unavailable.isNotEmpty) {
+      final String names = unavailable.map((item) => item.name).join(', ');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Sold out na ang: $names. Alisin muna sa cart bago mag-checkout.'),
+          backgroundColor: const Color(0xFF8E5136),
         ),
       );
       return;
@@ -186,6 +209,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       "is_additional_order": safeIsAdditional,
       "items": orderItemsPayload,
       "grand_total": _calculatedTotal,
+      "notes": _orderNotes.isEmpty ? null : _orderNotes,
       "client_order_id": idempotencyKey,
       "timestamp": DateTime.now().toIso8601String(),
     };
@@ -548,8 +572,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           isTakeout: widget.isTakeout,
           tableId: widget.tableId,
           totalAmount: _calculatedTotal,
-          isAdditionalOrder: widget.isAdditionalOrder,
+          isAdditionalOrder:
+              widget.isAdditionalOrder || UserSession.isAdditionalOrder,
           initialOrderItems: initialOrderItems,
+          initialNotes: _orderNotes,
         ),
       ),
       // Panatilihin ang Menu sa ilalim ng Live Status para ang phone Back ay
@@ -752,6 +778,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 24),
+                                if (_orderNotes.isNotEmpty) ...[
+                                  _buildSpecialInstructionsSummaryCard(),
+                                  const SizedBox(height: 24),
+                                ],
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
@@ -811,7 +841,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                                 ),
                                                 const SizedBox(height: 2),
                                                 Text(
-                                                  '₱${item.price.toStringAsFixed(2)} each',
+                                                  '${formatPeso(item.price)} each',
                                                   style: const TextStyle(color: Color(0xFFA47C3D), fontSize: 12, fontWeight: FontWeight.bold),
                                                 ),
                                               ],
@@ -849,7 +879,77 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  Widget _buildSpecialInstructionsSummaryCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF4D6),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE0B84C)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.sticky_note_2,
+            size: 18,
+            color: Color(0xFF8A6414),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'NOTE FOR KITCHEN',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.6,
+                    color: Color(0xFF8A6414),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _orderNotes,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF4A3608),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, _editableCart),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 32),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              'Edit',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF8A6414),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _renderPaymentExecutionDrawer() {
+    final bool isAdditional =
+        widget.isAdditionalOrder || UserSession.isAdditionalOrder;
+    final double existingTotal = widget.existingTicketsTotal;
+    final bool showBreakdown = isAdditional && existingTotal > 0;
+    final double grandTotal = _calculatedTotal + (showBreakdown ? existingTotal : 0.0);
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: const BoxDecoration(
@@ -870,15 +970,48 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (showBreakdown) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Existing tickets',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF788078)),
+                  ),
+                  Text(
+                    formatPeso(existingTotal, decimals: false),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'New items',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF788078)),
+                  ),
+                  Text(
+                    formatPeso(_calculatedTotal, decimals: false),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35)),
+                  ),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10.0),
+                child: Divider(height: 1, color: Color(0xFFE5DFD3)),
+              ),
+            ],
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Order Total',
-                  style: TextStyle(color: Color(0xFF788078), fontWeight: FontWeight.bold),
+                Text(
+                  showBreakdown ? 'Grand Total' : 'Order Total',
+                  style: const TextStyle(color: Color(0xFF788078), fontWeight: FontWeight.bold),
                 ),
                 Text(
-                  '₱${_calculatedTotal.toStringAsFixed(2)}',
+                  formatPeso(showBreakdown ? grandTotal : _calculatedTotal),
                   style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Color(0xFF203F35)),
                 ),
               ],

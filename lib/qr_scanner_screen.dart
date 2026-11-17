@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:image_picker/image_picker.dart';
 import 'order_type_selection_screen.dart';
@@ -259,6 +259,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
   }
 
   void _promptManualTableEntry() {
+    if (!kDebugMode) return;
     final TextEditingController tableController = TextEditingController();
     showDialog(
       context: context,
@@ -402,13 +403,15 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Enter Table Manually',
-              style: TextStyle(color: AppTheme.mutedGray),
+          // Testing-only fallback: hindi ito lumalabas sa release build.
+          if (kDebugMode)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text(
+                'Enter Table Manually',
+                style: TextStyle(color: AppTheme.mutedGray),
+              ),
             ),
-          ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.primaryCrimson,

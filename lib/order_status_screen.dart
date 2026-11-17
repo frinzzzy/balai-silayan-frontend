@@ -15,6 +15,7 @@ import 'services/order_event_bus.dart';
 import 'services/order_event_router.dart';
 import 'services/customer_navigation.dart';
 import 'config/api_config.dart';
+import 'utils/currency.dart';
 
 class OrderStatusScreen extends StatefulWidget {
   final dynamic orderId;
@@ -23,6 +24,7 @@ class OrderStatusScreen extends StatefulWidget {
   final double totalAmount;
   final bool isAdditionalOrder;
   final List<dynamic>? initialOrderItems;
+  final String initialNotes;
 
   const OrderStatusScreen({
     super.key,
@@ -32,6 +34,7 @@ class OrderStatusScreen extends StatefulWidget {
     this.totalAmount = 0.0,
     this.isAdditionalOrder = false,
     this.initialOrderItems,
+    this.initialNotes = '',
   });
 
   @override
@@ -52,6 +55,10 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   bool _billRequested = false;
   bool _popScopeCanPop = true;
 
+  /// `true` kapag hindi makuha ang latest status sa backend — ipinapakita ang
+  /// huling alam na status, na may malinaw na banner at Retry.
+  bool _showingLastKnown = false;
+
   static const Set<String> _terminalBillStatuses = <String>{
     'PAID',
     'COMPLETED',
@@ -66,6 +73,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   String _fetchedOrderCode = '';
   String _formattedTimestamp = '';
   List<dynamic> _fetchedOrderItems = [];
+  String _orderNotes = '';
   String _declineReason = '';
   String _lastAppliedStatus = '';
   String? _lastStatusOrderKey;
@@ -108,6 +116,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     super.initState();
     _fetchedTotalAmount = widget.totalAmount > 0 ? widget.totalAmount : UserSession.lastPlacedOrderTotal;
     _fetchedOrderItems = widget.initialOrderItems ?? UserSession.lastPlacedOrderItems;
+    _orderNotes = widget.initialNotes.trim();
     _connectRepositorySocketStream();
     _contextToken = OrderContext.instance.enter(
       mode: CustomerOrderMode.viewingOrder,
@@ -223,15 +232,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         }
       } catch (_) {}
 
-      if (matchingOrder == null && targetOrderId != null) {
-        matchingOrder = {
-          'order_id': targetOrderId,
-          'id': targetOrderId,
-          'total_amount': widget.totalAmount > 0 ? widget.totalAmount : UserSession.lastPlacedOrderTotal,
-          'order_status': 'PENDING',
-          'items': widget.initialOrderItems ?? UserSession.lastPlacedOrderItems,
-        };
-      }
+      // Huwag gumawa ng pekeng PENDING order kapag hindi nakuha sa backend —
+      // ang fallback sa ibaba ang magpapakita ng huling alam na status, kasama
+      // ang "last known" banner.
 
       // Ang "Finished Order" pop-up ay hawak ng OrderEventRouter (OrderContext
       // ang nagdedesisyon kung konektado ang ticket). Dito, status update lang.
@@ -315,7 +318,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           _fetchedOrderCode = code;
           _formattedTimestamp = timeStr;
           _fetchedOrderItems = sessionItems;
+          _orderNotes = (orderData['notes'] ?? '').toString().trim();
           _isLoadingLiveOrder = false;
+          _showingLastKnown = false;
 
           // I-restore ang bill-requested state mula sa server para tama pa rin
           // ito pag nag-refresh o bumalik ang customer sa screen.
@@ -342,20 +347,17 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           ? widget.totalAmount
           : (UserSession.lastPlacedOrderTotal > 0 ? UserSession.lastPlacedOrderTotal : 0.0);
 
-      final dt = DateTime.now();
-      final hour = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
-      final min = dt.minute.toString().padLeft(2, '0');
-      final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-
       setState(() {
         _hasActiveOrder = fallbackHasValidOrder;
         _fetchedTotalAmount = effectiveTotal;
         _fetchedOrderCode = _formatOrderCode(effectiveOrderId);
-        _formattedTimestamp = '$hour:$min $ampm • Today';
+        // ⚠️ Huwag i-overwrite ang oras ng order tuwing pumapalya ang refresh
+        // (6s polling) — dapat stable ang timestamp na galing sa server.
         if (_fetchedOrderItems.isEmpty) {
           _fetchedOrderItems = UserSession.lastPlacedOrderItems;
         }
         _isLoadingLiveOrder = false;
+        _showingLastKnown = true;
       });
     }
   }
@@ -622,6 +624,8 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
             children: [
               _buildRestaurantHeader(),
               _buildTableContextStrip(tableString),
+              if (_showingLastKnown && !_isLoadingLiveOrder)
+                _buildLastKnownBanner(),
               Expanded(
                 child: _isLoadingLiveOrder
                   ? const Center(
@@ -675,6 +679,42 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           );
         },
       ),
+      ),
+    );
+  }
+
+  Widget _buildLastKnownBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+      color: const Color(0xFFF4E6CF),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_outlined, size: 16, color: Color(0xFF8E5136)),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'Unable to refresh live status. Showing last known status.',
+              style: TextStyle(fontSize: 11, color: Color(0xFF8E5136), height: 1.3),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              if (!mounted) return;
+              setState(() => _isLoadingLiveOrder = true);
+              _fetchLatestOrderFromBackend();
+            },
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 30),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              'Retry',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1019,7 +1059,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   Widget _buildOrderSummaryCard(String orderCode, String tableString) {
     final timeString = _formattedTimestamp.isNotEmpty
         ? _formattedTimestamp
-        : '11:49 AM • Today';
+        : '—';
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1119,6 +1159,54 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
               ),
             ],
           ),
+          if (_orderNotes.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF4D6),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFE0B84C)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.sticky_note_2,
+                    size: 16,
+                    color: Color(0xFF8A6414),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'SPECIAL INSTRUCTIONS',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.6,
+                            color: Color(0xFF8A6414),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _orderNotes,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF4A3608),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (_fetchedOrderItems.isNotEmpty) ...[
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 10.0),
@@ -1172,7 +1260,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                           ),
                         ),
                         Text(
-                          '₱${lineTotal.toStringAsFixed(2)}',
+                          formatPeso(lineTotal),
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
@@ -1182,7 +1270,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                       ],
                     ),
                     Text(
-                      '₱${unitPrice.toStringAsFixed(2)} each',
+                      '${formatPeso(unitPrice)} each',
                       style: const TextStyle(
                         fontSize: 10,
                         color: Color(0xFF788078),
@@ -1192,7 +1280,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                           (addon) => Padding(
                         padding: const EdgeInsets.only(left: 8, top: 2),
                         child: Text(
-                          '+ ${addon['name'] ?? 'Add-on'} · ₱${(double.tryParse(addon['price']?.toString() ?? '0') ?? 0).toStringAsFixed(2)} each',
+                          '+ ${addon['name'] ?? 'Add-on'} · ${formatPeso(double.tryParse(addon['price']?.toString() ?? '0') ?? 0)} each',
                           style: const TextStyle(
                             fontSize: 10,
                             color: Color(0xFF53766C),
@@ -1221,7 +1309,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                 ),
               ),
               Text(
-                '₱${_fetchedTotalAmount.toStringAsFixed(2)}',
+                formatPeso(_fetchedTotalAmount),
                 style: const TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
@@ -1450,7 +1538,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                 ),
               ),
               Text(
-                'Total: ₱${_fetchedTotalAmount.toStringAsFixed(2)}',
+                'Total: ${formatPeso(_fetchedTotalAmount)}',
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,

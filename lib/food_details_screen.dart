@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'menu_screen.dart';
 import 'assistance_screen.dart';
 import 'config/api_config.dart';
+import 'utils/currency.dart';
 
 class FoodAddOn {
   final int id;
@@ -47,6 +48,11 @@ class FoodDetailsScreen extends StatefulWidget {
 }
 
 class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
+  /// Add-ons are temporarily hidden sa customer flow: hindi pa nila
+  /// napupunta nang tama ang add-on price sa cart/checkout payload. I-on
+  /// muli ito kapag kumpleto na ang end-to-end add-on support.
+  static const bool _showAddOns = false;
+
   int _quantity = 1;
   List<FoodAddOn> _availableAddOns = [];
   final Set<FoodAddOn> _selectedAddOns = {};
@@ -136,7 +142,7 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _fetchItemAddOns();
+    if (_showAddOns) _fetchItemAddOns();
   }
 
   Future<void> _fetchItemAddOns() async {
@@ -168,7 +174,9 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
   }
 
   double get _addOnsSubtotal => _selectedAddOns.fold(0.0, (sum, a) => sum + a.price);
-  double get _calculatedGrandTotal => (widget.foodItem.price + _addOnsSubtotal) * _quantity;
+  double get _calculatedGrandTotal =>
+      (widget.foodItem.price + (_showAddOns ? _addOnsSubtotal : 0.0)) *
+      _quantity;
 
   @override
   Widget build(BuildContext context) {
@@ -198,7 +206,7 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
                     const SizedBox(height: 12),
                     _buildDishDescriptionCopy(),
                     const SizedBox(height: 20),
-                    if (_availableAddOns.isNotEmpty) ...[
+                    if (_showAddOns && _availableAddOns.isNotEmpty) ...[
                       _buildAddOnsCard(),
                       const SizedBox(height: 20),
                     ],
@@ -453,7 +461,7 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
           style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF24382F)),
         ),
         Text(
-          '₱${widget.foodItem.price.toStringAsFixed(2)}',
+          formatPeso(widget.foodItem.price),
           style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
         ),
       ],
@@ -621,7 +629,11 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
             ? null
             : () {
           if (widget.onAddToCart != null) {
-            widget.onAddToCart!(widget.foodItem, _quantity, _selectedAddOns.toList());
+            widget.onAddToCart!(
+              widget.foodItem,
+              _quantity,
+              _showAddOns ? _selectedAddOns.toList() : const <FoodAddOn>[],
+            );
           }
           Navigator.pop(context);
         },
@@ -630,7 +642,7 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
           children: [
             Text(
               available
-                  ? 'Add to Order • ₱${_calculatedGrandTotal.toStringAsFixed(0)}'
+                  ? 'Add to Order • ${formatPeso(_calculatedGrandTotal, decimals: false)}'
                   : 'Currently Unavailable',
               style: TextStyle(
                 color: available ? Colors.white : const Color(0xFF788078),

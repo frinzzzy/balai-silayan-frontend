@@ -8,6 +8,7 @@ import '../widgets/customer_bottom_nav.dart';
 import 'services/global_socket_listener.dart';
 import 'services/customer_navigation.dart';
 import 'config/api_config.dart';
+import 'utils/currency.dart';
 
 class BillRequestedScreen extends StatefulWidget {
   final int? tableId;
@@ -528,7 +529,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text('Food & drinks', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
-              Text('₱${widget.foodDrinksTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+              Text(formatPeso(widget.foodDrinksTotal, decimals: false), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
             ],
           ),
           const SizedBox(height: 10),
@@ -536,7 +537,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text('Selected add-ons', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
-              Text('₱${widget.addOnsTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+              Text(formatPeso(widget.addOnsTotal, decimals: false), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
             ],
           ),
           const Padding(
@@ -548,7 +549,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             children: [
               const Text('Total Billed Amount', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF24382F))),
               Text(
-                '₱${widget.totalAmount.toStringAsFixed(0)}',
+                formatPeso(widget.totalAmount, decimals: false),
                 style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
               ),
             ],

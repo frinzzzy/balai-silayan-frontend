@@ -39,12 +39,34 @@ class CustomerCartStore {
   static final Map<int, CartLine> _lines = <int, CartLine>{};
   static String? _savedKey;
 
+  /// Order-level special instructions (hal. "Allergic to peanuts").
+  /// Isang note lang kada ticket, kaya kasama ito sa cart store para hindi
+  /// mawala kapag nag-navigate sa pagitan ng Menu, Cart, at Checkout.
+  static final ValueNotifier<String> specialInstructionsNotifier =
+      ValueNotifier<String>('');
+  static String _specialInstructions = '';
+
+  static String get specialInstructions => _specialInstructions;
+
+  static void setSpecialInstructions(String value) {
+    final String normalized = value.trim();
+    if (normalized == _specialInstructions) return;
+    _specialInstructions = normalized;
+    specialInstructionsNotifier.value = normalized;
+  }
+
   static String _currentKey() {
-    final dynamic id = UserSession.activeSessionId ??
-        UserSession.sessionId ??
-        UserSession.activeTableId ??
-        UserSession.activeTableNumber;
-    return id?.toString() ?? 'default';
+    // Table id ang primary key: stable ito kahit magbago ang session id
+    // (hal. bagong session pagkatapos mag-request ng bill o mag-reconnect).
+    // Dati ay session id ang nauuna, kaya nawawala ang cart sa gitna ng order
+    // kapag nag-refresh ang session.
+    final dynamic tableId =
+        UserSession.activeTableId ?? UserSession.activeTableNumber;
+    if (tableId != null) return 'table:$tableId';
+
+    final dynamic sessionId =
+        UserSession.activeSessionId ?? UserSession.sessionId;
+    return sessionId != null ? 'session:$sessionId' : 'default';
   }
 
   /// Ibinabalik ang naka-save na cart para sa kasalukuyang session/table.
@@ -53,6 +75,8 @@ class CustomerCartStore {
     if (_savedKey != null && _savedKey != key) {
       // Ibang session/table na — huwag dalhin ang lumang cart.
       _lines.clear();
+      _specialInstructions = '';
+      specialInstructionsNotifier.value = '';
     }
     _savedKey = key;
     return _lines.values.toList(growable: false);
@@ -68,6 +92,11 @@ class CustomerCartStore {
 
   static void clear() {
     _savedKey = _currentKey();
+    final bool hadNotes = _specialInstructions.isNotEmpty;
+    if (hadNotes) {
+      _specialInstructions = '';
+      specialInstructionsNotifier.value = '';
+    }
     if (_lines.isEmpty) return;
     _lines.clear();
     revision.value++;

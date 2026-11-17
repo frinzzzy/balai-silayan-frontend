@@ -12,6 +12,7 @@ import 'services/order_context.dart';
 import 'services/order_event_bus.dart';
 import 'services/customer_navigation.dart';
 import 'bill_requested_screen.dart';
+import 'utils/currency.dart';
 import 'user_session.dart';
 import '../widgets/customer_bottom_nav.dart';
 import 'config/api_config.dart';
@@ -1255,7 +1256,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                           ),
                         ),
                         Text(
-                          '₱${lineTotal.toStringAsFixed(2)}',
+                          formatPeso(lineTotal),
                           style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
@@ -1266,7 +1267,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '₱${unitPrice.toStringAsFixed(2)} each',
+                      '${formatPeso(unitPrice)} each',
                       style: const TextStyle(
                         fontSize: 11,
                         color: Color(0xFF788078),
@@ -1276,7 +1277,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                           (addon) => Padding(
                         padding: const EdgeInsets.only(left: 8, top: 2),
                         child: Text(
-                          '+ ${addon['name'] ?? 'Add-on'} · ₱${_parseDouble(addon['price']).toStringAsFixed(2)} each',
+                          '+ ${addon['name'] ?? 'Add-on'} · ${formatPeso(_parseDouble(addon['price']))} each',
                           style: const TextStyle(
                             fontSize: 10,
                             color: Color(0xFF53766C),
@@ -1324,7 +1325,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                 style: TextStyle(fontSize: 12, color: Color(0xFF788078)),
               ),
               Text(
-                '₱${_foodDrinksTotal.toStringAsFixed(0)}',
+                formatPeso(_foodDrinksTotal, decimals: false),
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -1342,7 +1343,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                 style: TextStyle(fontSize: 12, color: Color(0xFF788078)),
               ),
               Text(
-                '₱${_addOnsTotal.toStringAsFixed(0)}',
+                formatPeso(_addOnsTotal, decimals: false),
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -1361,7 +1362,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                   style: TextStyle(fontSize: 12, color: Color(0xFF53766C)),
                 ),
                 Text(
-                  '₱${requestedTotals.grand.toStringAsFixed(0)}',
+                  formatPeso(requestedTotals.grand, decimals: false),
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -1387,7 +1388,7 @@ class _SessionBillScreenState extends State<SessionBillScreen> {
                 ),
               ),
               Text(
-                '₱${_grandTotal.toStringAsFixed(0)}',
+                formatPeso(_grandTotal, decimals: false),
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,

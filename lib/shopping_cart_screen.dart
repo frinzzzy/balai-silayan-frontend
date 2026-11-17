@@ -7,6 +7,8 @@ import 'assistance_screen.dart';
 import 'user_session.dart';
 import 'config/api_config.dart';
 import 'services/global_socket_listener.dart';
+import 'services/customer_cart_store.dart';
+import 'utils/currency.dart';
 
 class ShoppingCartScreen extends StatefulWidget {
   final Map<FoodItem, int> cart;
@@ -35,6 +37,16 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
   List<dynamic> _sessionOrdersSummary = [];
   double _sessionGrandTotal = 0.0;
 
+  late final TextEditingController _notesController;
+  static const int _maxNoteLength = 300;
+  static const List<String> _quickNotes = <String>[
+    'No onions',
+    'Less ice',
+    'Less salt',
+    'Allergic to peanuts',
+    'Extra sauce',
+  ];
+
   String get _baseUrl => ApiConfig.baseUrl;
 
   @override
@@ -42,6 +54,10 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     super.initState();
     _editableCart = Map.from(widget.cart);
     _calculatedTotal = widget.total;
+    _notesController = TextEditingController(
+      text: CustomerCartStore.specialInstructions,
+    );
+    _notesController.addListener(_onNotesChanged);
     if (widget.isAdditionalOrder || UserSession.isAdditionalOrder) {
       _fetchOrdersSummary();
     } else {
@@ -49,6 +65,38 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
       _sessionGrandTotal = 0.0;
     }
     _connectCartSocket();
+  }
+
+  void _onNotesChanged() {
+    CustomerCartStore.setSpecialInstructions(_notesController.text);
+    if (mounted) setState(() {});
+  }
+
+  void _toggleQuickNote(String note) {
+    final String current = _notesController.text.trim();
+    final List<String> parts = current
+        .split(',')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    final bool alreadyThere =
+        parts.any((part) => part.toLowerCase() == note.toLowerCase());
+    if (alreadyThere) {
+      parts.removeWhere((part) => part.toLowerCase() == note.toLowerCase());
+    } else {
+      parts.add(note);
+    }
+    _notesController.text = parts.join(', ');
+    _notesController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _notesController.text.length),
+    );
+  }
+
+  bool _isQuickNoteSelected(String note) {
+    return _notesController.text
+        .split(',')
+        .map((part) => part.trim().toLowerCase())
+        .contains(note.toLowerCase());
   }
 
   void _connectCartSocket() {
@@ -70,6 +118,8 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
 
   @override
   void dispose() {
+    _notesController.removeListener(_onNotesChanged);
+    _notesController.dispose();
     super.dispose();
   }
 
@@ -109,13 +159,13 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
     }
   }
 
+  /// Tinatawag ito palagi mula sa loob ng `setState`, kaya hindi na nagse-set
+  /// ng sariling `setState` (dati kasi nested).
   void _recalculateTotal() {
-    setState(() {
-      _calculatedTotal = _editableCart.entries.fold(
-        0.0,
-        (sum, entry) => sum + (entry.key.price * entry.value),
-      );
-    });
+    _calculatedTotal = _editableCart.entries.fold(
+      0.0,
+      (sum, entry) => sum + (entry.key.price * entry.value),
+    );
   }
 
   void _updateQuantity(FoodItem item, int delta) {
@@ -188,6 +238,8 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                               ),
                             if (isAdditional) const SizedBox(height: 12),
                             ..._editableCart.entries.map((entry) => _buildCartItemCard(entry.key, entry.value)),
+                            const SizedBox(height: 12),
+                            _buildSpecialInstructionsCard(),
                             const SizedBox(height: 12),
                             _buildPriceBreakdownCard(),
                             const SizedBox(height: 24),
@@ -586,10 +638,126 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                 ),
               ),
               Text(
-                '₱${itemTotal.toStringAsFixed(0)}',
+                formatPeso(itemTotal, decimals: false),
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpecialInstructionsCard() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFDFA),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE5DFD3)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.sticky_note_2_outlined,
+                size: 18,
+                color: Color(0xFFA47C3D),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Special instructions',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF203F35),
+                  ),
+                ),
+              ),
+              Text(
+                '${_notesController.text.length}/$_maxNoteLength',
+                style: const TextStyle(fontSize: 11, color: Color(0xFF788078)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Allergies, less ice, no onions — makikita agad ng kitchen ang note na ito.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF788078)),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _quickNotes.map((note) {
+              final bool selected = _isQuickNoteSelected(note);
+              return GestureDetector(
+                onTap: () => _toggleQuickNote(note),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? const Color(0xFF203F35)
+                        : const Color(0xFFF8F4EC),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: selected
+                          ? const Color(0xFF203F35)
+                          : const Color(0xFFE5DFD3),
+                    ),
+                  ),
+                  child: Text(
+                    note,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: selected
+                          ? Colors.white
+                          : const Color(0xFF203F35),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _notesController,
+            maxLength: _maxNoteLength,
+            maxLines: 3,
+            minLines: 2,
+            style: const TextStyle(fontSize: 13, color: Color(0xFF24382F)),
+            decoration: InputDecoration(
+              hintText:
+                  'Hal. "Allergic to peanuts", "Less ice", "No onions"...',
+              hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9A9F98)),
+              filled: true,
+              fillColor: const Color(0xFFF8F4EC),
+              counterText: '',
+              contentPadding: const EdgeInsets.all(12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: Color(0xFFE5DFD3)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: Color(0xFFE5DFD3)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: Color(0xFF203F35)),
+              ),
+            ),
           ),
         ],
       ),
@@ -621,7 +789,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text('New Order Total', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
-                Text('₱${_calculatedTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+                Text(formatPeso(_calculatedTotal, decimals: false), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
               ],
             ),
             const Padding(
@@ -633,7 +801,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
               children: [
                 const Text('Grand Total', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF24382F))),
                 Text(
-                  '₱${combinedGrandTotal.toStringAsFixed(0)}',
+                  formatPeso(combinedGrandTotal, decimals: false),
                   style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
                 ),
               ],
@@ -668,7 +836,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text('Active Tickets Total', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
-              Text('₱${_sessionGrandTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+              Text(formatPeso(_sessionGrandTotal, decimals: false), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
             ],
           ),
           const SizedBox(height: 8),
@@ -676,7 +844,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text('New Cart Items Total', style: TextStyle(fontSize: 12, color: Color(0xFF788078))),
-              Text('₱${_calculatedTotal.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
+              Text(formatPeso(_calculatedTotal, decimals: false), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF203F35))),
             ],
           ),
           const Padding(
@@ -688,7 +856,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
             children: [
               const Text('Grand Total', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF24382F))),
               Text(
-                '₱${combinedGrandTotal.toStringAsFixed(0)}',
+                formatPeso(combinedGrandTotal, decimals: false),
                 style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
               ),
             ],
@@ -705,8 +873,6 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
 
   Widget _buildActionButtonsArea() {
     final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
-    _calculatedTotal;
-    final double combinedGrandTotal = isAdditional ? (_calculatedTotal + _sessionGrandTotal) : _calculatedTotal;
 
     return Column(
       children: [
@@ -725,10 +891,14 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
                 MaterialPageRoute(
                   builder: (context) => CheckoutScreen(
                     cart: _editableCart,
-                    total: combinedGrandTotal,
+                    // New items lang ang ipapasa: iyon ang actual na babayaran
+                    // sa order na ito. Ang existing tickets ay hiwalay na
+                    // breakdown sa Checkout.
+                    total: _calculatedTotal,
+                    existingTicketsTotal: isAdditional ? _sessionGrandTotal : 0.0,
                     tableId: widget.tableId,
                     isTakeout: widget.isTakeout,
-                    isAdditionalOrder: widget.isAdditionalOrder,
+                    isAdditionalOrder: isAdditional,
                   ),
                 ),
               );
@@ -748,7 +918,7 @@ class _ShoppingCartScreenState extends State<ShoppingCartScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  'Review order • ₱${combinedGrandTotal.toStringAsFixed(0)}',
+                  'Review order • ${formatPeso(_calculatedTotal, decimals: false)}',
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                 ),
                 const SizedBox(width: 8),

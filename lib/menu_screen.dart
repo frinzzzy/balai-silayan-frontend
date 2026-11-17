@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
@@ -17,8 +18,10 @@ import 'services/order_context.dart';
 import 'services/order_event_bus.dart';
 import 'services/order_event_router.dart';
 import 'services/customer_cart_store.dart';
+import 'services/customer_order_reset.dart';
 import 'services/ordering_gate.dart';
 import 'config/api_config.dart';
+import 'utils/currency.dart';
 
 class FoodItem {
   final int itemDbId;
@@ -156,12 +159,27 @@ class FoodItem {
   /// Parehong menu item = parehong cart line, kahit muling nabuo ang object
   /// mula sa `CustomerCartStore` (hal. pag-restore pagkatapos gumawa ng bagong
   /// MenuScreen).
+  ///
+  /// Kapag `itemDbId == 0` (hal. local/test item na walang backend id), hindi
+  /// pwedeng id lang ang basehan — magko-collide ang lahat ng item at
+  /// magsasama-sama sa isang cart line. Fallback sa name + category + price.
   @override
-  bool operator ==(Object other) =>
-      identical(this, other) || (other is FoodItem && other.itemDbId == itemDbId);
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! FoodItem) return false;
+    if (itemDbId > 0 && other.itemDbId > 0) {
+      return itemDbId == other.itemDbId;
+    }
+    return other.itemDbId == itemDbId &&
+        other.name.trim().toLowerCase() == name.trim().toLowerCase() &&
+        other.categoryId == categoryId &&
+        other.price == price;
+  }
 
   @override
-  int get hashCode => itemDbId.hashCode;
+  int get hashCode => itemDbId > 0
+      ? itemDbId.hashCode
+      : Object.hash(name.trim().toLowerCase(), categoryId, price);
 }
 
 class MenuCategory {
@@ -208,6 +226,7 @@ class _MenuScreenState extends State<MenuScreen> {
   List<FoodItem> _menuRepository = [];
   final Map<FoodItem, int> _orderCart = {};
   bool _isLoading = true;
+  String? _menuError;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
 
@@ -318,6 +337,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
     _restoreCartFromStore();
     CustomerCartStore.revision.addListener(_onCartStoreChanged);
+    CustomerOrderReset.epoch.addListener(_handleOrderReset);
 
     _fetchDatabaseCategories();
     _fetchLiveDatabaseMenu();
@@ -396,6 +416,22 @@ class _MenuScreenState extends State<MenuScreen> {
     setState(_restoreCartFromStore);
   }
 
+  /// Kapag na-settle/na-decline ang ticket, i-reset ang additional-order state
+  /// ng Menu instance na ito kahit `popUntil` lang ang nangyari (hindi na
+  /// tumakbo ang `initState`). Kaya malinis na bagong order ang susunod.
+  void _handleOrderReset() {
+    if (!mounted) return;
+    UserSession.isAdditionalOrder = false;
+    UserSession.targetParentOrderId = null;
+    UserSession.autoAdditionalParentId = null;
+    UserSession.lastPlacedOrderId = null;
+    UserSession.firstOrderId = null;
+    _forceNewOrderMode = true;
+    OrderingGate.invalidate();
+    _polledOrderStatuses.clear();
+    setState(() {});
+  }
+
   Future<void> _fetchBillLockState() async {
     final int tableNum = _chosenTableNumber ??
         UserSession.activeTableNumber ??
@@ -459,6 +495,7 @@ class _MenuScreenState extends State<MenuScreen> {
     // Kung may laman ang cart, i-check ang gating bago payagang magpatuloy.
     // Kung wala, papayagan pa ring buksan ang Cart para makita ang active
     // tickets — kahit PREPARING na ang parent.
+    if (!await _pruneUnavailableCartItems()) return;
     if (_orderCart.isNotEmpty && !await _ensureCanAddItems()) return;
     if (!mounted) return;
     final updatedCart = await Navigator.push<Map<FoodItem, int>>(
@@ -483,6 +520,68 @@ class _MenuScreenState extends State<MenuScreen> {
     }
   }
 
+  /// Kapag naubusan ng stock ang item habang nasa cart, huwag hayaang
+  /// mag-checkout. Ipaalam at alisin sa cart (kung pumayag ang customer).
+  Future<bool> _pruneUnavailableCartItems() async {
+    if (_orderCart.isEmpty || _menuRepository.isEmpty) return true;
+
+    final Map<int, FoodItem> latestById = <int, FoodItem>{
+      for (final FoodItem item in _menuRepository)
+        if (item.itemDbId > 0) item.itemDbId: item,
+    };
+    final List<FoodItem> unavailable = _orderCart.keys
+        .where((item) {
+          final FoodItem? latest = latestById[item.itemDbId];
+          return latest != null && !latest.isAvailable;
+        })
+        .toList(growable: false);
+
+    if (unavailable.isEmpty) return true;
+    if (!mounted) return false;
+
+    final String names = unavailable.map((item) => item.name).join(', ');
+    final bool? remove = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Item sold out',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+        ),
+        content: Text(
+          'Naubos na ang stock ng: $names.\n\nAalisin ba ito sa cart para makapagpatuloy?',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep', style: TextStyle(color: Color(0xFF788078))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Remove and continue',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (remove == true && mounted) {
+      setState(() {
+        for (final FoodItem item in unavailable) {
+          _orderCart.remove(item);
+        }
+      });
+      _persistCart();
+      return true;
+    }
+    return false;
+  }
+
   void _handleOpenCartIntent() {
     if (!MenuCartIntent.openCart.value) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -492,43 +591,52 @@ class _MenuScreenState extends State<MenuScreen> {
     });
   }
 
+  /// Guard para hindi magdoble ang gate request/dialog kapag mabilis ang tap.
+  bool _gateCheckInFlight = false;
+
   /// Pareho sa Order Type Selection ang gating bago magdagdag ng items:
   /// bill-requested at blocked ticket statuses.
   Future<bool> _ensureCanAddItems() async {
     if (!_effectiveAdditional) return true;
+    if (_gateCheckInFlight) return false;
+    _gateCheckInFlight = true;
 
-    final int tableId = _chosenTableNumber ??
-        UserSession.activeTableNumber ??
-        UserSession.activeTableId ??
-        7;
-    final dynamic parentId = _activeParentOrderId;
-    if (parentId == null || parentId.toString().trim().isEmpty) return true;
+    try {
+      final int tableId = _chosenTableNumber ??
+          UserSession.activeTableNumber ??
+          UserSession.activeTableId ??
+          7;
+      final dynamic parentId = _activeParentOrderId;
+      if (parentId == null || parentId.toString().trim().isEmpty) return true;
 
-    final OrderingGateResult result = await OrderingGate.evaluate(
-      tableId: tableId,
-      parentOrderId: parentId,
-    );
-
-    if (!mounted || result.allowed) return true;
-
-    if (result.isBillLocked) {
-      await _showBillLockedDialog();
-      return false;
-    }
-
-    if (result.isStatusBlocked) {
-      final bool? proceed = await _showAdditionalOrderTransitionDialog(
-        orderId: parentId,
-        status: result.ticketStatus ?? 'PREPARING',
+      final OrderingGateResult result = await OrderingGate.evaluate(
+        tableId: tableId,
+        parentOrderId: parentId,
       );
-      if (proceed == true) {
-        _switchToNewOrderMode();
-        return true;
-      }
-      return false;
-    }
 
-    return true;
+      if (!mounted || result.allowed) return true;
+
+      if (result.isBillLocked) {
+        await _showBillLockedDialog();
+        return false;
+      }
+
+      if (result.isStatusBlocked) {
+        final bool? proceed = await _showAdditionalOrderTransitionDialog(
+          orderId: parentId,
+          status: result.ticketStatus ?? 'PREPARING',
+        );
+        if (proceed == true) {
+          _switchToNewOrderMode();
+          return true;
+        }
+        return false;
+      }
+
+      return true;
+    } finally {
+      _gateCheckInFlight = false;
+    }
   }
 
   Future<void> _showBillLockedDialog() async {
@@ -731,6 +839,7 @@ class _MenuScreenState extends State<MenuScreen> {
   void dispose() {
     MenuCartIntent.openCart.removeListener(_handleOpenCartIntent);
     CustomerCartStore.revision.removeListener(_onCartStoreChanged);
+    CustomerOrderReset.epoch.removeListener(_handleOrderReset);
     _heartbeatTimer?.cancel();
     _statusPollTimer?.cancel();
     if (_refreshToken != null) {
@@ -868,6 +977,15 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   Future<void> _fetchLiveDatabaseMenu() async {
+    // Spinner lang kapag wala pang laman, para hindi mag-flash ang buong menu
+    // tuwing may stock update.
+    if (mounted && _menuRepository.isEmpty) {
+      setState(() {
+        _isLoading = true;
+        _menuError = null;
+      });
+    }
+
     try {
       final response = await http.get(Uri.parse('$_baseUrl/api/v1/customer/menu')).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
@@ -877,27 +995,65 @@ class _MenuScreenState extends State<MenuScreen> {
           setState(() {
             _menuRepository = menuList.map((item) => FoodItem.fromJson(item)).toList();
             _isLoading = false;
+            _menuError = null;
           });
           return;
         }
       }
-      _loadFallbackSamples();
-    } catch (_) {
-      _loadFallbackSamples();
-    }
-  }
+    } catch (_) {}
 
-  void _loadFallbackSamples() {
+    if (!mounted) return;
+
+    // Debug builds lang ang test data — sa release, dapat malinaw sa customer
+    // na hindi available ang menu, at hindi mag-order ng pekeng item.
+    if (kDebugMode && _menuRepository.isEmpty) {
+      _loadFallbackSamples();
+      return;
+    }
+
+    // Kung may dati nang menu (hal. stock refresh), huwag itong burahin.
+    if (_menuRepository.isNotEmpty) return;
+
     setState(() {
-      _menuRepository = _testSamples;
       _isLoading = false;
+      _menuError = 'Hindi ma-load ang menu ngayon. Check your connection and try again.';
     });
   }
 
+  void _loadFallbackSamples() {
+    if (!mounted) return;
+    setState(() {
+      _menuRepository = _testSamples;
+      _isLoading = false;
+      _menuError = null;
+    });
+  }
+
+  void _retryLoadMenu() {
+    _fetchLiveDatabaseMenu();
+    _fetchDatabaseCategories();
+  }
+
   Future<void> _handleQuantityTap(FoodItem item, int variance) async {
+    if (variance > 0 && !item.isAvailable) {
+      _showUnavailableSnack();
+      return;
+    }
     if (variance > 0 && !await _ensureCanAddItems()) return;
     if (!mounted) return;
     _modifyQuantity(item, variance);
+  }
+
+  void _showUnavailableSnack() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Sold out na ang item na ito. Please choose another dish.'),
+          backgroundColor: Color(0xFF8E5136),
+        ),
+      );
   }
 
   void _modifyQuantity(FoodItem item, int variance) {
@@ -914,6 +1070,62 @@ class _MenuScreenState extends State<MenuScreen> {
 
   double get _cartGrandTotal => _orderCart.entries.fold(0.0, (total, entry) => total + (entry.key.price * entry.value));
 
+  /// Hindi na basta tumatalon sa Order Type Selection kapag pinindot ang back.
+  /// Magtatanong muna, at kung walang ma-pop, saka lang sadyang babalik sa
+  /// order options.
+  Future<void> _confirmLeaveMenu() async {
+    if (!mounted) return;
+    final bool hasCart = _orderCart.isNotEmpty;
+
+    final bool? leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text(
+          hasCart ? 'Leave without ordering?' : 'Leave the menu?',
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+        ),
+        content: Text(
+          hasCart
+              ? 'May laman pa ang cart mo. Mananatili ito hanggang makabalik ka sa menu.'
+              : 'Babalik ka sa order options.',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Continue ordering', style: TextStyle(color: Color(0xFF788078))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Leave',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (leave != true || !mounted) return;
+
+    final NavigatorState nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+      return;
+    }
+    nav.pushReplacement(
+      MaterialPageRoute(
+        builder: (ctx) => OrderTypeSelectionScreen(
+          tableNumber: _chosenTableNumber ?? 7,
+          tableId: _chosenTableNumber ?? 7,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final activeCategories = _categoriesList.isNotEmpty ? _categoriesList : _categoriesFallback;
@@ -926,22 +1138,10 @@ class _MenuScreenState extends State<MenuScreen> {
     }).toList();
 
     return PopScope(
-      canPop: _popScopeCanPop,
+      canPop: _popScopeCanPop && _orderCart.isEmpty,
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
-        final NavigatorState nav = Navigator.of(context);
-        if (nav.canPop()) {
-          nav.pop();
-          return;
-        }
-        nav.pushReplacement(
-          MaterialPageRoute(
-            builder: (ctx) => OrderTypeSelectionScreen(
-              tableNumber: _chosenTableNumber ?? 7,
-              tableId: _chosenTableNumber ?? 7,
-            ),
-          ),
-        );
+        _confirmLeaveMenu();
       },
       child: Scaffold(
         backgroundColor: const Color(0xFFF8F4EC),
@@ -953,6 +1153,8 @@ class _MenuScreenState extends State<MenuScreen> {
               Expanded(
                 child: _isLoading
                   ? const Center(child: CircularProgressIndicator(color: Color(0xFF203F35)))
+                  : (_menuError != null && _menuRepository.isEmpty)
+                  ? _buildMenuErrorView()
                   : SingleChildScrollView(
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                       child: Column(
@@ -986,21 +1188,7 @@ class _MenuScreenState extends State<MenuScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           InkWell(
-            onTap: () {
-              final NavigatorState nav = Navigator.of(context);
-              if (nav.canPop()) {
-                nav.pop();
-                return;
-              }
-              nav.pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) => OrderTypeSelectionScreen(
-                    tableNumber: _chosenTableNumber ?? 7,
-                    tableId: _chosenTableNumber ?? 7,
-                  ),
-                ),
-              );
-            },
+            onTap: _confirmLeaveMenu,
             borderRadius: BorderRadius.circular(22),
             child: Container(
               width: 44,
@@ -1048,6 +1236,67 @@ class _MenuScreenState extends State<MenuScreen> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMenuErrorView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: const BoxDecoration(
+                color: Color(0xFFEEE7D9),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.restaurant_menu,
+                size: 34,
+                color: Color(0xFFA47C3D),
+              ),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Menu unavailable',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF203F35),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _menuError ??
+                  'Hindi ma-load ang menu ngayon. Please try again.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF788078),
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF203F35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: _retryLoadMenu,
+              icon: const Icon(Icons.refresh, color: Colors.white, size: 18),
+              label: const Text(
+                'Retry',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1179,7 +1428,9 @@ class _MenuScreenState extends State<MenuScreen> {
         crossAxisCount: columns,
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
-        childAspectRatio: 0.62,
+        // Bahagyang mas mataas para hindi mag-overflow kapag mahaba ang item
+        // name o pinalaki ang font sa accessibility settings.
+        childAspectRatio: 0.56,
       ),
       itemCount: items.length,
       itemBuilder: (context, index) {
@@ -1255,17 +1506,34 @@ class _MenuScreenState extends State<MenuScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(foodItem.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF24382F)), maxLines: 2, overflow: TextOverflow.ellipsis),
-                            const SizedBox(height: 4),
-                            Text('₱${foodItem.price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF203F35))),
-                          ],
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Flexible(
+                                child: Text(foodItem.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF24382F)), maxLines: 2, overflow: TextOverflow.ellipsis),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(formatPeso(foodItem.price), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF203F35))),
+                            ],
+                          ),
                         ),
+                        const SizedBox(height: 6),
                         Align(
                           alignment: Alignment.centerRight,
-                          child: productCount == 0
+                          child: !foodItem.isAvailable
+                              ? Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEEE7D9),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Text(
+                                    'Sold out',
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8E5136)),
+                                  ),
+                                )
+                              : productCount == 0
                               ? InkWell(
                                   onTap: () => _handleQuantityTap(foodItem, 1),
                                   child: Container(
@@ -1313,7 +1581,7 @@ class _MenuScreenState extends State<MenuScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text('View Cart (${_orderCart.values.fold(0, (sum, q) => sum + q)} items)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                    Text('₱${_cartGrandTotal.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                    Text(formatPeso(_cartGrandTotal, decimals: false), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                   ],
                 ),
               ),

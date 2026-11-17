@@ -67,19 +67,20 @@ class OrderingGate {
     OrderingGateResult result = const OrderingGateResult(
       OrderingGateKind.allowed,
     );
+    // Huwag i-cache ang "hindi natin alam" (offline/5xx/stale auth): baka
+    // maipit ang customer sa maling decision sa loob ng TTL.
+    bool cacheable = false;
 
     try {
-      final response = await http
-          .get(
-            Uri.parse('${ApiConfig.baseUrl}/api/v1/orders/unfinished')
-                .replace(queryParameters: <String, String>{
-              'table_id': tableId.toString(),
-            }),
-            headers: UserSession.authHeaders,
-          )
-          .timeout(const Duration(seconds: 8));
+      final response = await _getWithAuthFallback(
+        Uri.parse('${ApiConfig.baseUrl}/api/v1/orders/unfinished')
+            .replace(queryParameters: <String, String>{
+          'table_id': tableId.toString(),
+        }),
+      );
 
       if (response.statusCode == 200) {
+        cacheable = true;
         final dynamic decoded = jsonDecode(response.body);
         final List<dynamic> orders = decoded is Map
             ? (decoded['orders'] ?? decoded['data'] ?? <dynamic>[])
@@ -111,23 +112,86 @@ class OrderingGate {
           break;
         }
 
-        // Wala na sa "unfinished" list = malamang PAID/COMPLETED na — hindi na
-        // dapat tanggap ng additional items. Ipaalam sa customer at hayaang
-        // pumili kung brand-new order ang gusto.
         if (!foundParent) {
-          result = const OrderingGateResult(
-            OrderingGateKind.statusBlocked,
-            ticketStatus: 'COMPLETED',
-          );
+          // Wala sa "unfinished" list — posibleng settled na, pero posibleng
+          // race lang ng list endpoint. I-verify muna by ID bago mag-block.
+          final OrderingGateResult? byId = await _evaluateByOrderId(parent);
+          if (byId != null) {
+            result = byId;
+          } else {
+            // Hindi natin kayang i-confirm — huwag harangin at huwag i-cache.
+            // Sasaluhin ng backend validation sa checkout.
+            cacheable = false;
+            result = const OrderingGateResult(OrderingGateKind.allowed);
+          }
         }
       }
     } catch (_) {
       // Best-effort: kung offline, huwag harangin ang customer. Sasaluhin ng
       // backend validation sa checkout kung may conflict.
+      cacheable = false;
     }
 
-    _cache[cacheKey] = _GateCacheEntry(result, DateTime.now());
+    if (cacheable) {
+      _cache[cacheKey] = _GateCacheEntry(result, DateTime.now());
+    }
     return result;
+  }
+
+  /// GET na may auth, pero kapag expired/401 ang token ay susubukan ulit nang
+  /// walang auth header (public endpoints) bago sumuko.
+  static Future<http.Response> _getWithAuthFallback(Uri uri) async {
+    final http.Response response = await http
+        .get(uri, headers: UserSession.authHeaders)
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      return http
+          .get(uri)
+          .timeout(const Duration(seconds: 8));
+    }
+    return response;
+  }
+
+  /// Kunin ang final status ng order by ID. `null` kapag hindi ma-confirm
+  /// (offline, 5xx, o walang valid response) — huwag mag-assume ng COMPLETED.
+  static Future<OrderingGateResult?> _evaluateByOrderId(String parent) async {
+    try {
+      final http.Response response = await _getWithAuthFallback(
+        Uri.parse('${ApiConfig.baseUrl}/api/v1/orders/$parent'),
+      );
+      if (response.statusCode == 404) {
+        // Talagang wala na ang order — settled/cancelled na ito.
+        return const OrderingGateResult(
+          OrderingGateKind.statusBlocked,
+          ticketStatus: 'COMPLETED',
+        );
+      }
+      if (response.statusCode != 200) return null;
+
+      final dynamic decoded = jsonDecode(response.body);
+      if (decoded is! Map) return null;
+      dynamic raw = decoded['data'] is Map ? decoded['data'] : decoded;
+      if (raw is Map && raw['order'] is Map) raw = raw['order'];
+      if (raw is! Map) return null;
+
+      final dynamic requestedAt = raw['bill_requested_at'];
+      if (requestedAt != null) {
+        UserSession.setTicketBillRequested(parent, requestedAt);
+        return const OrderingGateResult(OrderingGateKind.billLocked);
+      }
+
+      final String status =
+          (raw['order_status'] ?? raw['status'] ?? '').toString().toUpperCase();
+      if (blockedAdditionalStatuses.contains(status)) {
+        return OrderingGateResult(
+          OrderingGateKind.statusBlocked,
+          ticketStatus: status,
+        );
+      }
+      return const OrderingGateResult(OrderingGateKind.allowed);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Puwersahing i-refetch sa susunod na tsek (hal. pagkatapos mag-order).

@@ -62,9 +62,36 @@ class AudioNotificationService {
 
   /// Android 8.0+ notification channel — kailangan gawa bago mag-send ng
   /// system notification (walang channel, hindi lalabas ang notification).
-  static const String orderNotificationChannelId = 'balai_silayan_orders';
+  ///
+  /// MAHALAGA: ang tunog ng channel ay **naka-lock** pagkatapos ma-create sa
+  /// device. Kapag pinalitan ang sound file, taasan ang version suffix
+  /// (v2 → v3) para makagawa ng BAGONG channel na may bagong tunog. Kung
+  /// hindi, mananatiling luma ang tunog sa mga naka-install nang device.
+  static const String orderNotificationChannelId = 'balai_silayan_orders_v2';
+
+  /// Legacy channel id na ginagamit pa rin ng deployed backend sa FCM
+  /// `android.notification.channelId`. Kung wala ito sa device, **dating
+  /// tinatanggihan ng Android ang push notification** (walang lumalabas).
+  /// Ginagawa natin ito bilang compatibility bridge hanggang ma-deploy ang
+  /// backend na gumagamit na ng `v2`.
+  static const String legacyOrderNotificationChannelId =
+      'balai_silayan_orders';
   static const String orderNotificationChannelName =
       'Balai Silayan Order Alerts';
+  static const String orderNotificationChannelDescription =
+      'Balai Silayan order status alerts';
+
+  /// Bundled in-app chime (assets/sounds/…). Asset path ay relative sa
+  /// `assets/` folder dahil iyon ang default prefix ng audioplayers.
+  static const String notificationSoundAsset = 'sounds/notification_ring.mp3';
+
+  /// System notification sound mula sa `android/app/src/main/res/raw/`
+  /// (filename lang, walang extension).
+  static const String orderNotificationSoundRaw = 'notification_ring';
+
+  /// Fallback kung hindi ma-load ang bundled asset (hal. offline build issue).
+  static const String _notificationSoundRemoteUrl =
+      'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3';
 
   /// I-initialize ang flutter_local_notifications: notification channel +
   /// Android plugin init. Ito ang dapat i-call bago mag-show ng notification.
@@ -77,12 +104,69 @@ class AudioNotificationService {
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
         ),
       );
+
+      // Android 8+ (API 26+): gawin agad ang channel na may explicit custom
+      // sound. Kung iasa lang sa unang show(), puwedeng ma-lock ang channel
+      // sa default notification sound — at hindi na ito mababago.
+      if (!kIsWeb) {
+        final AndroidFlutterLocalNotificationsPlugin? android =
+            plugin.resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>();
+        await android?.createNotificationChannel(
+          const AndroidNotificationChannel(
+            orderNotificationChannelId,
+            orderNotificationChannelName,
+            description: orderNotificationChannelDescription,
+            importance: Importance.high,
+            playSound: true,
+            sound: RawResourceAndroidNotificationSound(
+              orderNotificationSoundRaw,
+            ),
+            enableVibration: true,
+          ),
+        );
+
+        // Compatibility: ang FCM push mula sa kasalukuyang deployed backend ay
+        // naka-target sa lumang channel id. Kung wala ito sa device, hindi
+        // lumalabas ang new order / additional / bill / low stock alerts.
+        await android?.createNotificationChannel(
+          const AndroidNotificationChannel(
+            legacyOrderNotificationChannelId,
+            '$orderNotificationChannelName (legacy)',
+            description: 'Compatibility channel para sa FCM push alerts',
+            importance: Importance.high,
+            playSound: true,
+            sound: RawResourceAndroidNotificationSound(
+              orderNotificationSoundRaw,
+            ),
+            enableVibration: true,
+          ),
+        );
+      }
+
       debugPrint(
         '✅ [AudioNotificationService] Local notifications initialized.',
       );
     } catch (e) {
       debugPrint(
         '⚠️ [AudioNotificationService] Local notifications init failed: $e',
+      );
+    }
+
+    // I-cache nang maaga ang chime: mas mabilis ang unang alert at agad na
+    // lumalabas sa log kung hindi na-bundle/na-load ang sound asset.
+    await preloadAlertSound();
+  }
+
+  /// I-load sa audio cache ang notification chime.
+  static Future<void> preloadAlertSound() async {
+    try {
+      await AudioCache.instance.load(notificationSoundAsset);
+      debugPrint('✅ [AudioNotificationService] Alert sound cached.');
+    } catch (e) {
+      debugPrint(
+        '⚠️ [AudioNotificationService] alert sound failed to load '
+        '($notificationSoundAsset): $e',
       );
     }
   }
@@ -120,10 +204,13 @@ class AudioNotificationService {
           android: const AndroidNotificationDetails(
             orderNotificationChannelId,
             orderNotificationChannelName,
-            channelDescription: 'Balai Silayan order status alerts',
+            channelDescription: orderNotificationChannelDescription,
             importance: Importance.high,
             priority: Priority.high,
             playSound: true,
+            sound: RawResourceAndroidNotificationSound(
+              orderNotificationSoundRaw,
+            ),
             enableVibration: true,
             icon: 'ic_stat_balai',
           ),
@@ -143,30 +230,50 @@ class AudioNotificationService {
   /// Play sound chime and trigger built-in haptic vibration
   static Future<void> playStatusAlertSound() async {
     try {
-      if (kIsWeb) {
-        await _audioPlayer.stop();
-        try {
-          await _audioPlayer.play(
-            UrlSource(
-              'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3',
+      await _audioPlayer.stop();
+
+      // Android: gamitin ang notification stream (hindi media) para hindi
+      // dipende sa media volume at hindi makipag-away sa audio focus ng iba.
+      if (!kIsWeb) {
+        await _audioPlayer.setAudioContext(
+          AudioContext(
+            android: const AudioContextAndroid(
+              contentType: AndroidContentType.sonification,
+              usageType: AndroidUsageType.notificationEvent,
+              audioFocus: AndroidAudioFocus.gainTransientMayDuck,
             ),
-            volume: 1.0,
-          );
-        } catch (_) {
-          await _audioPlayer.play(
-            AssetSource('sounds/notification_ring.mp3'),
-            volume: 1.0,
-          );
-        }
-      } else {
-        await _audioPlayer.stop();
+          ),
+        );
+        await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+      }
+
+      // Asset-first sa LAHAT ng platform para pareho ang tunog at gumana kahit
+      // offline. Remote URL na lang ang fallback kung mabigo ang asset load.
+      bool played = false;
+      try {
         await _audioPlayer.play(
-          AssetSource('sounds/notification_ring.mp3'),
+          AssetSource(notificationSoundAsset),
+          volume: 1.0,
+        );
+        played = true;
+      } catch (assetError) {
+        debugPrint(
+          '⚠️ [AudioNotificationService] asset sound failed '
+          '($notificationSoundAsset): $assetError',
+        );
+      }
+
+      if (!played) {
+        await _audioPlayer.play(
+          UrlSource(_notificationSoundRemoteUrl),
           volume: 1.0,
         );
       }
-    } catch (e) {
-      debugPrint("Error playing notification sound: $e");
+    } catch (e, stackTrace) {
+      debugPrint(
+        '❌ [AudioNotificationService] Error playing notification sound: '
+        '$e\n$stackTrace',
+      );
     }
 
     try {

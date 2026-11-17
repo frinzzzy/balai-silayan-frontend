@@ -94,13 +94,23 @@ class ReceiptTicketDialog extends StatelessWidget {
       pageWidgets.add(
         RepaintBoundary(
           key: key,
-          child: SizedBox(
-            width: 340,
-            child: _buildTicketColumn(
-              items: pages[i],
-              firstPage: i == 0,
-              pageNo: i + 1,
-              totalPages: pages.length,
+          // Puti at opaque ang background para hindi maging ITIM ang saved
+          // image sa gallery. (Transparent kasi dati — ang RepaintBoundary
+          // lang ang kino-capture, hindi kasama ang dialog background, kaya
+          // ini-interpret na black ng gallery viewers ang alpha.)
+          child: ColoredBox(
+            color: Colors.white,
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: SizedBox(
+                width: 340,
+                child: _buildTicketColumn(
+                  items: pages[i],
+                  firstPage: i == 0,
+                  pageNo: i + 1,
+                  totalPages: pages.length,
+                ),
+              ),
             ),
           ),
         ),
@@ -154,10 +164,19 @@ class ReceiptTicketDialog extends StatelessWidget {
     );
   }
 
-  Future<List<File>> _captureReceiptPages() async {
+  /// Kinukuha ang receipt pages bilang PNG files sa temp directory.
+  ///
+  /// [saveToGallery] — `true` lang para sa "Save Receipt" button. Ang "Share"
+  /// ay hindi na nagsa-save sa gallery (Option A): share lang talaga, at hindi
+  /// kailangan ng gallery permission para makapag-share.
+  Future<List<File>> _captureReceiptPages({bool saveToGallery = false}) async {
     final List<List<OrderLine>> pages = _splitItemsIntoPages(order.items);
     final Directory tempDir = await getTemporaryDirectory();
     final List<File> savedFiles = <File>[];
+
+    // Siguraduhing tapos na ang kasalukuyang frame bago i-capture para hindi
+    // makuha ang half-painted na receipt.
+    await WidgetsBinding.instance.endOfFrame;
 
     for (int i = 0; i < pages.length; i++) {
       final GlobalKey key = _pageKeys.putIfAbsent(
@@ -168,14 +187,31 @@ class ReceiptTicketDialog extends StatelessWidget {
           key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
       if (boundary == null) break;
 
+      if (boundary.debugNeedsPaint) {
+        await WidgetsBinding.instance.endOfFrame;
+      }
+
       final ui.Image image = await boundary.toImage(pixelRatio: 3.0);
-      final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final ByteData? byteData = await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      image.dispose();
       if (byteData == null) break;
       final Uint8List bytes = byteData.buffer.asUint8List();
 
-      final File file = File('${tempDir.path}/balai_silayan_receipt_bs_${order.id}_p${i + 1}.png');
-      await file.writeAsBytes(bytes);
-      await Gal.putImageBytes(bytes, name: 'balai_silayan_receipt_bs_${order.id}_p${i + 1}.png');
+      final File file = File(
+        '${tempDir.path}/balai_silayan_receipt_bs_${order.id}_p${i + 1}.png',
+      );
+      await file.writeAsBytes(bytes, flush: true);
+
+      if (saveToGallery) {
+        // Gumamit ng `Gal.putImage(path)` — tama ang extension at MIME na
+        // dedetect ng MediaStore. (Huwag magpasa ng name na may `.png` sa
+        // `putImageBytes`: dinadagdagan iyon ng Gal ng extension, kaya
+        // nagiging `..._p1.png.png` at hindi ma-decode ng gallery.)
+        await Gal.putImage(file.path);
+      }
+
       savedFiles.add(file);
     }
 
@@ -183,7 +219,22 @@ class ReceiptTicketDialog extends StatelessWidget {
   }
 
   Future<void> _saveReceipt(BuildContext context) async {
-    final List<File> savedFiles = await _captureReceiptPages();
+    // Humingi ng gallery access kung kailangan (Android 9 pababa). Sa
+    // Android 10+ ay MediaStore ang gamit, kaya hindi na kailangan.
+    try {
+      if (!await Gal.hasAccess()) {
+        await Gal.requestAccess();
+      }
+    } catch (e) {
+      debugPrint('⚠️ [Receipt] gallery permission request failed: $e');
+    }
+
+    List<File> savedFiles = <File>[];
+    try {
+      savedFiles = await _captureReceiptPages(saveToGallery: true);
+    } catch (e) {
+      debugPrint('⚠️ [Receipt] save to gallery failed: $e');
+    }
     if (!context.mounted) return;
     if (savedFiles.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -191,14 +242,18 @@ class ReceiptTicketDialog extends StatelessWidget {
       );
       return;
     }
-    if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Receipt saved as image! (${savedFiles.length} file${savedFiles.length > 1 ? 's' : ''})'), backgroundColor: AdminTheme.textDark),
     );
   }
 
   Future<void> _shareReceipt(BuildContext context) async {
-    final List<File> savedFiles = await _captureReceiptPages();
+    List<File> savedFiles = <File>[];
+    try {
+      savedFiles = await _captureReceiptPages();
+    } catch (e) {
+      debugPrint('⚠️ [Receipt] share capture failed: $e');
+    }
     if (savedFiles.isEmpty) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

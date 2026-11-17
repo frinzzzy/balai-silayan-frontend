@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'menu_screen.dart';
 import 'order_status_screen.dart';
+import 'session_bill_screen.dart';
 import 'user_session.dart';
 import 'config/api_config.dart';
+import 'services/customer_navigation.dart';
+import 'widgets/customer_bottom_nav.dart';
 
 class AssistanceScreen extends StatefulWidget {
   final int? tableId;
@@ -521,52 +523,54 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
   }
 
   Widget _buildCustomerBottomNav() {
-    return Container(
-      height: 70,
-      decoration: const BoxDecoration(
-        color: Color(0xFFFFFDFA),
-        border: Border(top: BorderSide(color: Color(0xFFE5DFD3))),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildNavItem(Icons.restaurant, 'Menu', onTap: () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')));
-          }),
-          _buildNavItem(Icons.receipt_long_outlined, 'Orders', onTap: () {
-            Navigator.push(context, MaterialPageRoute(builder: (context) => OrderStatusScreen(orderId: UserSession.activeOrderId, isTakeout: widget.isTakeout, tableId: widget.tableId)));
-          }),
-          _buildNavItem(Icons.notifications, 'Help', isActive: true, onTap: () {}),
-          _buildNavItem(Icons.account_balance_wallet_outlined, 'Pay', onTap: () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MenuScreen(), settings: const RouteSettings(name: 'menu')));
-          }),
-        ],
-      ),
-    );
-  }
+    final int tableNum = widget.tableId ??
+        UserSession.activeTableId ??
+        UserSession.activeTableNumber ??
+        7;
 
-  Widget _buildNavItem(IconData icon, String label, {bool isActive = false, required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 20, color: isActive ? const Color(0xFF203F35) : const Color(0xFF788078)),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-              color: isActive ? const Color(0xFF203F35) : const Color(0xFF788078),
+    void goToMenu() {
+      // Bumalik sa existing Menu kung meron, para hindi mawala ang cart.
+      CustomerNavigation.openMenu(
+        context,
+        tableId: tableNum,
+        tableNumber: tableNum,
+        isAdditionalOrder: UserSession.isAdditionalOrder,
+      );
+    }
+
+    return CustomerBottomNav(
+      activeTab: CustomerNavTab.help,
+      onMenu: goToMenu,
+      onCart: () {
+        MenuCartIntent.requestOpen();
+        goToMenu();
+      },
+      onLiveStatus: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => OrderStatusScreen(
+              orderId: UserSession.lastPlacedOrderId ??
+                  UserSession.targetParentOrderId ??
+                  UserSession.activeOrderId,
+              isTakeout: widget.isTakeout,
+              tableId: widget.tableId,
+              isAdditionalOrder: UserSession.isAdditionalOrder,
             ),
           ),
-          if (isActive) ...[
-            const SizedBox(height: 2),
-            Container(width: 16, height: 2, decoration: BoxDecoration(color: const Color(0xFFA47C3D), borderRadius: BorderRadius.circular(2))),
-          ]
-        ],
-      ),
+        );
+      },
+      onBill: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => SessionBillScreen(
+              tableId: widget.tableId,
+              isTakeout: widget.isTakeout,
+            ),
+          ),
+        );
+      },
     );
   }
 }

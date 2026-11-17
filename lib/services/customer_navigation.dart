@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../menu_screen.dart';
 import '../user_session.dart';
+import 'customer_order_reset.dart';
 
 /// Sentral na paraan ng pagbabalik sa MenuScreen.
 ///
@@ -39,7 +40,12 @@ class CustomerNavigation {
       });
     }
 
-    if (foundMenu) return;
+    if (foundMenu) {
+      // Existing Menu instance ang na-pop (hindi tumakbo ang `initState`), kaya
+      // kailangan ng signal para malinis ang lumang additional-order state.
+      if (resetOrderContext) CustomerOrderReset.request();
+      return;
+    }
 
     navigator.pushReplacement(
       MaterialPageRoute<void>(
