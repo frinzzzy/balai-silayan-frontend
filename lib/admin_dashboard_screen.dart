@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 
 import 'screens/admin/models/admin_order_model.dart';
+import 'screens/admin/models/staff_user_model.dart';
 import 'screens/admin/services/admin_service.dart';
 import 'screens/admin/screens/order_queue_screen.dart';
 import 'screens/admin/screens/sales_analytics_screen.dart';
 import 'screens/admin/screens/stock_management_screen.dart';
+import 'screens/admin/screens/staff_management_screen.dart';
 import 'services/socket_service.dart';
 import 'services/audio_notification_service.dart';
 import 'services/fcm_service.dart';
@@ -59,12 +61,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Timer? _pollTimer;
   Timer? _lowStockDebounce;
 
-  final TextEditingController _usernameController = TextEditingController(
-    text: 'admin',
-  );
-  final TextEditingController _passwordController = TextEditingController(
-    text: 'admin123',
-  );
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
 
   List<AdminOrder> _orders = [];
   DailySalesStats _salesStats = DailySalesStats(
@@ -434,15 +432,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       if (!mounted) return;
       setState(() => _isLoggingIn = false);
 
+      dynamic decoded;
+      try {
+        decoded = jsonDecode(response.body);
+      } catch (_) {
+        decoded = null;
+      }
+      final Map<String, dynamic> resData = decoded is Map
+          ? Map<String, dynamic>.from(decoded)
+          : <String, dynamic>{};
+
       if (response.statusCode == 200) {
-        final resData = jsonDecode(response.body);
         final token =
             resData['token'] ??
             resData['data']?['token'] ??
             resData['access_token'];
         UserSession.authToken = token;
         AdminService.staffAuthToken = token;
-        AdminService.staffName = username;
+
+        // Dito nanggagaling ang role-based UI. Ang login response ay may
+        // `data.user { id, username, role, full_name, is_active }`.
+        final dynamic data = resData['data'];
+        final dynamic rawUser = data is Map ? data['user'] : null;
+        AdminService.currentUser = rawUser is Map
+            ? StaffUser.fromJson(Map<String, dynamic>.from(rawUser))
+            : null;
+        AdminService.staffName =
+            AdminService.currentUser?.displayName ?? username;
 
         setState(() {
           _isLoggedIn = true;
@@ -455,18 +471,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         _loadDashboardData();
         _initSocketSync();
 
+        final String displayName =
+            AdminService.currentUser?.displayName ?? username;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Login Successful! Welcome to Admin Portal.'),
+          SnackBar(
+            content: Text('Login successful. Welcome, $displayName.'),
             backgroundColor: AdminTheme.textDark,
           ),
         );
         return;
       } else {
+        final String backendMessage = (resData['message'] ?? '')
+            .toString()
+            .trim();
+        final String message = backendMessage.isNotEmpty
+            ? backendMessage
+            : response.statusCode == 429
+            ? 'Too many login attempts. Try again later.'
+            : 'Invalid username or password.';
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Invalid credentials. Please try again.'),
+            SnackBar(
+              content: Text(message),
               backgroundColor: AppTheme.errorRust,
             ),
           );
@@ -519,6 +545,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               unawaited(FcmService.unregisterAsStaff());
               UserSession.clearSession();
               AdminService.staffAuthToken = null;
+              AdminService.currentUser = null;
+              AdminService.staffName = null;
               _orderIdsSeeded = false;
               _knownOrderIds.clear();
               _knownOrderTotals.clear();
@@ -609,7 +637,44 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         paymentMethod: currentOrder.paymentMethod,
         declineReason: declineReason,
         isApiConnected: _isApiConnected,
-      );
+      ).then((bool ok) {
+        if (!mounted) return;
+        if (!ok) {
+          // Halimbawa: invalid status transition (409) o transient failure.
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not update the order status. Please refresh the queue.'),
+              backgroundColor: Color(0xFF8E5136),
+            ),
+          );
+        }
+      });
+    }
+  }
+
+  String get _sectionTitle {
+    switch (_currentTabIndex) {
+      case 1:
+        return 'SALES ANALYTICS';
+      case 2:
+        return 'STOCK MANAGEMENT';
+      case 3:
+        return 'STAFF MANAGEMENT';
+      default:
+        return 'ORDER QUEUE';
+    }
+  }
+
+  String get _portalTitle {
+    switch (AdminService.currentUser?.role) {
+      case 'CASHIER':
+        return 'BALAI SILAYAN · CASHIER STATION';
+      case 'KITCHEN':
+        return 'BALAI SILAYAN · KITCHEN STATION';
+      case 'WAITER':
+        return 'BALAI SILAYAN · WAITER STATION';
+      default:
+        return 'BALAI SILAYAN · ADMIN PORTAL';
     }
   }
 
@@ -646,7 +711,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        'BALAI SILAYAN · ADMIN PORTAL',
+                        _portalTitle,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontFamily: 'Libre Baskerville',
@@ -657,11 +722,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         ),
                       ),
                       Text(
-                        _currentTabIndex == 0
-                            ? 'ORDER QUEUE'
-                            : _currentTabIndex == 1
-                            ? 'SALES ANALYTICS'
-                            : 'STOCK MANAGEMENT',
+                        _sectionTitle,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 9,
@@ -771,6 +832,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                             key: _stockScreenKey,
                             onRefresh: _loadDashboardData,
                           ),
+                          if (AdminService.isAdmin)
+                            const StaffManagementScreen(),
                         ],
                       ),
               ),
@@ -797,6 +860,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       icon: Icon(Icons.inventory_2_outlined),
                       label: 'Stock Mgmt',
                     ),
+                    if (AdminService.isAdmin)
+                      NavigationDestination(
+                        icon: Icon(Icons.groups_2_outlined),
+                        label: 'Staff',
+                      ),
                   ],
                 ),
         );
@@ -864,7 +932,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         'icon': Icons.inventory_2_outlined,
         'label': 'Stock management',
       },
+      if (AdminService.isAdmin)
+        {
+          'index': 3,
+          'icon': Icons.groups_2_outlined,
+          'label': 'Staff management',
+        },
     ];
+
+    final StaffUser? currentUser = AdminService.currentUser;
+    final String displayName =
+        currentUser?.displayName ?? AdminService.staffName ?? 'Staff';
+    final String roleLabel = currentUser?.roleLabel ?? 'Staff';
+    final String initial = displayName.trim().isEmpty
+        ? '?'
+        : displayName.trim().substring(0, 1).toUpperCase();
 
     return Container(
       width: 264,
@@ -918,7 +1000,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           const SizedBox(height: 10),
           ...navItems.map((item) {
             final idx = item['index'] as int;
-            final isSelected = _currentTabIndex == idx;
+            final String staffRole = (AdminService.currentUser?.role ?? '').toUpperCase();
+            final bool navItemVisible = switch (idx) {
+              0 => true,
+              1 => staffRole == 'ADMIN',
+              2 => staffRole == 'ADMIN' || staffRole == 'KITCHEN' || staffRole == 'WAITER',
+              3 => AdminService.isAdmin,
+              _ => false,
+            };
+            if (!navItemVisible) {
+              return const SizedBox.shrink();
+            }
+            final bool isSelected = _currentTabIndex == idx;
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: InkWell(
@@ -971,12 +1064,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             padding: const EdgeInsets.all(20.0),
             child: Row(
               children: [
-                const CircleAvatar(
+                CircleAvatar(
                   radius: 17,
                   backgroundColor: AdminTheme.deepGreenSelected,
                   child: Text(
-                    'A',
-                    style: TextStyle(
+                    initial,
+                    style: const TextStyle(
                       color: AdminTheme.goldAccent,
                       fontWeight: FontWeight.w700,
                     ),
@@ -988,18 +1081,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Admin Staff',
-                        style: TextStyle(
+                        displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                           fontSize: 13,
                         ),
                       ),
                       Text(
-                        'Restaurant Management',
+                        roleLabel,
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.6),
                           fontSize: 11,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],

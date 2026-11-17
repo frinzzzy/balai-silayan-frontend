@@ -2,12 +2,19 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/admin_order_model.dart';
+import '../models/staff_user_model.dart';
 import '../../../config/api_config.dart';
 
 class AdminService {
   final String _baseUrl = ApiConfig.baseUrl;
   static String? staffAuthToken;
   static String? staffName;
+
+  /// Ang naka-login na staff account (galing sa `/auth/login` o `/auth/me`).
+  /// Ito ang source of truth para sa role-based UI.
+  static StaffUser? currentUser;
+
+  static bool get isAdmin => currentUser?.role == 'ADMIN';
 
   Map<String, String> get _authHeaders {
     final token = staffAuthToken;
@@ -133,6 +140,49 @@ class AdminService {
       'breakdown': [],
       'top_items': <TopDishItem>[],
     };
+  }
+
+  /// Legal na status transitions ng order (mirror ng backend `ORDER_STATUS_FLOW`
+  /// sa `orderService.js`). Pinapapagana lamang ito ang valid na next status.
+  static bool isValidStatusTransition(String fromStatus, String toStatus) {
+    final String from = fromStatus.trim().toUpperCase();
+    final String to = toStatus.trim().toUpperCase();
+    switch (from) {
+      case 'PENDING':
+      case 'NEW':
+        return to == 'PREPARING' || to == 'DECLINED';
+      case 'PREPARING':
+        return to == 'READY' || to == 'DECLINED';
+      case 'READY':
+        return to == 'SERVED' || to == 'DECLINED';
+      case 'SERVED':
+        return to == 'PAID' || to == 'COMPLETED' || to == 'DECLINED';
+      default:
+        return false;
+    }
+  }
+
+  /// ADMIN / WAITER / KITCHEN lang ang may sakop sa status updates
+  /// (katulad ng backend route guard sa `/api/v1/orders/:id/status`).
+  static bool canUpdateOrderStatus(String fromStatus, String toStatus, {String? role}) {
+    if (!isValidStatusTransition(fromStatus, toStatus)) return false;
+    final String normalizedRole = (role ?? '').trim().toUpperCase();
+    return normalizedRole == 'ADMIN' ||
+        normalizedRole == 'WAITER' ||
+        normalizedRole == 'KITCHEN';
+  }
+
+  /// ADMIN / CASHIER / WAITER ang may sakop sa payment processing.
+  /// (Cashier lang ang may access sa payment para sa orders na kailangang bayaran.)
+  static bool canProcessPayment(String status, {String? role}) {
+    final String normalizedRole = (role ?? '').trim().toUpperCase();
+    final bool roleAllowed = normalizedRole == 'ADMIN' ||
+        normalizedRole == 'CASHIER' ||
+        normalizedRole == 'WAITER';
+    if (!roleAllowed) return false;
+    // Ang payment ay para sa orders na may outstanding balance; sa queue UI,
+    // nakikita natin ang pay actions para sa SERVED na UNPAID orders.
+    return status.trim().toUpperCase() == 'SERVED';
   }
 
   /// PATCH /api/v1/orders/:id/status

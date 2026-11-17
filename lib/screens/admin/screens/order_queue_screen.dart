@@ -8,6 +8,7 @@ import 'receipt_ticket_dialog.dart';
 import 'payment_dialog_widget.dart';
 import '../../../theme/app_theme.dart';
 import '../../../theme/admin_tokens.dart';
+import '../../../utils/currency.dart';
 import '../../../widgets/status_chip.dart';
 import '../../../widgets/empty_state.dart';
 
@@ -265,7 +266,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
       _buildKpiCard(
         icon: Icons.attach_money_rounded,
         label: 'GROSS SALES TODAY',
-        value: '₱${totalSales.toStringAsFixed(2)}',
+        value: formatPeso(totalSales),
         iconBg: AdminTheme.successBg,
         iconFg: AdminTheme.successFg,
       ),
@@ -338,9 +339,16 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                   style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.0, color: AdminTheme.mutedDark),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(fontFamily: 'Libre Baskerville', fontSize: 20, fontWeight: FontWeight.w400, color: AdminTheme.textDark),
+                // FittedBox para hindi mag-overflow/wrap kapag umabot sa
+                // milyon ang halaga (hal. ₱1,234,567.89) sa makitid na card.
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    maxLines: 1,
+                    style: const TextStyle(fontFamily: 'Libre Baskerville', fontSize: 20, fontWeight: FontWeight.w400, color: AdminTheme.textDark),
+                  ),
                 ),
               ],
             ),
@@ -370,7 +378,8 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
       bool matchesSearch = _searchQuery.isEmpty ||
           o.id.toString().contains(_searchQuery) ||
           o.tableNumber.toString().contains(_searchQuery) ||
-          o.itemsDescription.toLowerCase().contains(_searchQuery.toLowerCase());
+          o.itemsDescription.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          o.notes.toLowerCase().contains(_searchQuery.toLowerCase());
       return matchesStatus && matchesTable && matchesSearch;
     }).toList();
 
@@ -756,6 +765,72 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
               StatusChip(status: order.status),
             ],
           ),
+          if (order.hasNotes) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: order.hasAllergyNote
+                    ? const Color(0xFFFBE0DC)
+                    : const Color(0xFFFFF4D6),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: order.hasAllergyNote
+                      ? AdminTheme.danger
+                      : AdminTheme.goldAccent,
+                  width: 1.5,
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    order.hasAllergyNote
+                        ? Icons.warning_amber_rounded
+                        : Icons.sticky_note_2,
+                    size: 18,
+                    color: order.hasAllergyNote
+                        ? AdminTheme.danger
+                        : AdminTheme.priorityFg,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          order.hasAllergyNote
+                              ? 'ALLERGY • SPECIAL INSTRUCTIONS'
+                              : 'SPECIAL INSTRUCTIONS',
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.6,
+                            color: order.hasAllergyNote
+                                ? AdminTheme.danger
+                                : AdminTheme.priorityFg,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          order.notes,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            height: 1.3,
+                            color: order.hasAllergyNote
+                                ? const Color(0xFF8E2A20)
+                                : AdminTheme.textDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (order.hasPendingBillRequest) ...[
             const SizedBox(height: 10),
             Container(
@@ -837,64 +912,133 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
   }
 
   Widget _buildActionButtonsForOrder(BuildContext context, AdminOrder order) {
-    if (order.status.toUpperCase() == 'PENDING' || order.status.toUpperCase() == 'NEW') {
+    final String status = order.status.toUpperCase();
+    final String? role = AdminService.currentUser?.role;
+
+    final bool canAccept =
+        (role == 'ADMIN' || role == 'WAITER' || role == 'KITCHEN') &&
+        AdminService.isValidStatusTransition(status, 'PREPARING');
+    final bool canMarkReady =
+        (role == 'ADMIN' || role == 'KITCHEN') &&
+        AdminService.isValidStatusTransition(status, 'READY');
+    final bool canMarkServed =
+        (role == 'ADMIN' || role == 'WAITER') &&
+        AdminService.isValidStatusTransition(status, 'SERVED');
+    final bool canDecline =
+        (role == 'ADMIN' || role == 'WAITER' || role == 'KITCHEN') &&
+        AdminService.isValidStatusTransition(status, 'DECLINED');
+    final bool showPaymentActions =
+        (role == 'ADMIN' || role == 'CASHIER' || role == 'WAITER') &&
+        order.paymentMethod.toUpperCase() == 'UNPAID' &&
+        (status == 'SERVED' || order.hasPendingBillRequest);
+
+    if (status == 'PENDING' || status == 'NEW') {
       return Row(
-        children: [
-          Expanded(
-            child: OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AdminTheme.danger,
-                side: const BorderSide(color: AdminTheme.border),
-                backgroundColor: AdminTheme.surfaceIvory,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
+        children: <Widget>[
+          if (canDecline)
+            Expanded(
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AdminTheme.danger,
+                  side: const BorderSide(color: AdminTheme.border),
+                  backgroundColor: AdminTheme.surfaceIvory,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: () => _showDeclineDialog(context, order.id),
+                child: const Text('Decline', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               ),
-              onPressed: () => _showDeclineDialog(context, order.id),
-              child: const Text('Decline', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AdminTheme.textDark,
-                foregroundColor: Colors.white,
-                elevation: 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
+          if (canAccept)
+            Expanded(
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AdminTheme.textDark,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: () => _showConfirmationDialog(
+                  context,
+                  'Accept Order #${order.id}?',
+                  'Are you sure you want to accept and start preparing this order for Table #${order.tableNumber}?',
+                  () => widget.onActionTriggered(order.id, 'PREPARING'),
+                ),
+                child: const Text('Review & accept', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               ),
-              onPressed: () => _showConfirmationDialog(
-                context,
-                'Accept Order #${order.id}?',
-                'Are you sure you want to accept and start preparing this order for Table #${order.tableNumber}?',
-                () => widget.onActionTriggered(order.id, 'PREPARING'),
-              ),
-              child: const Text('Review & accept', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
             ),
-          ),
         ],
       );
-    } else if (order.status.toUpperCase() == 'PREPARING') {
-      return SizedBox(
-        width: double.infinity,
-        child: ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AdminTheme.textDark,
-            foregroundColor: Colors.white,
-            elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            padding: const EdgeInsets.symmetric(vertical: 12),
+    }
+
+    if (status == 'PREPARING') {
+      if (canMarkReady) {
+        return SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AdminTheme.textDark,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+            onPressed: () => _showConfirmationDialog(
+              context,
+              'Mark Order #${order.id} as Ready?',
+              'Confirm that this order is ready to be served to Table #${order.tableNumber}?',
+              () => widget.onActionTriggered(order.id, 'READY'),
+            ),
+            child: const Text('Mark as Ready', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
           ),
-          onPressed: () => _showConfirmationDialog(
-            context,
-            'Mark Order #${order.id} as Served?',
-            'Confirm that this order has been served to Table #${order.tableNumber}?',
-            () => widget.onActionTriggered(order.id, 'SERVED'),
+        );
+      }
+      if (canDecline) {
+        return SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AdminTheme.danger,
+              side: const BorderSide(color: AdminTheme.border),
+              backgroundColor: AdminTheme.surfaceIvory,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+            onPressed: () => _showDeclineDialog(context, order.id),
+            child: const Text('Decline', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
           ),
-          child: const Text('Mark as Served', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-        ),
-      );
-    } else if (order.status.toUpperCase() == 'SERVED' && order.paymentMethod.toUpperCase() == 'UNPAID') {
+        );
+      }
+      return const SizedBox.shrink();
+    }
+
+    if (status == 'READY') {
+      if (canMarkServed) {
+        return SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AdminTheme.textDark,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+            onPressed: () => _showConfirmationDialog(
+              context,
+              'Mark Order #${order.id} as Served?',
+              'Confirm that this order has been served to Table #${order.tableNumber}?',
+              () => widget.onActionTriggered(order.id, 'SERVED'),
+            ),
+            child: const Text('Mark as Served', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+          ),
+        );
+      }
+      return const SizedBox.shrink();
+    }
+
+    if (showPaymentActions) {
       return Row(
         children: [
           Expanded(
@@ -928,6 +1072,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
         ],
       );
     }
+
     return const SizedBox.shrink();
   }
 }

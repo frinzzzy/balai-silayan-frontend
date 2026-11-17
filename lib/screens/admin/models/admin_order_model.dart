@@ -75,6 +75,7 @@ class AdminOrder {
   final DateTime? createdAt;
   final int? parentOrderId;
   final bool isAdditional;
+  final String notes;
 
   AdminOrder({
     required this.id,
@@ -90,7 +91,43 @@ class AdminOrder {
     this.createdAt,
     this.parentOrderId,
     this.isAdditional = false,
+    this.notes = '',
   });
+
+  /// May note ba ang customer na dapat makita agad ng kitchen?
+  bool get hasNotes => notes.trim().isNotEmpty;
+
+  /// Allergy-related ba ang note? Kapag oo, pula (hindi amber) ang callout.
+  bool get hasAllergyNote {
+    final String lower = notes.toLowerCase();
+    const List<String> keywords = <String>[
+      'allergic',
+      'allergy',
+      'allergies',
+      'peanut',
+      'peanuts',
+      'nut',
+      'nuts',
+      'shellfish',
+      'seafood',
+      'shrimp',
+      'prawn',
+      'crab',
+      'milk',
+      'dairy',
+      'lactose',
+      'gluten',
+      'egg',
+      'eggs',
+      'soy',
+    ];
+    return keywords.any(
+      (keyword) => RegExp(
+        r'\b' + RegExp.escape(keyword) + r'\b',
+        caseSensitive: false,
+      ).hasMatch(lower),
+    );
+  }
 
   /// May nakabinbing bill request ba para sa session ng order na ito?
   /// Hindi ito binibilang kapag terminal na ang status (bayad/sarado na).
@@ -134,6 +171,7 @@ class AdminOrder {
           orderType == 'ADDITIONAL' ||
           (parsedParentId != null && parsedParentId > 0) ||
           json['is_additional_order'] == true,
+      notes: (json['notes'] ?? '').toString().trim(),
     );
   }
 
