@@ -172,13 +172,13 @@ class AdminService {
         normalizedRole == 'KITCHEN';
   }
 
-  /// ADMIN / CASHIER / WAITER ang may sakop sa payment processing.
-  /// (Cashier lang ang may access sa payment para sa orders na kailangang bayaran.)
+  /// ADMIN / CASHIER lang ang may sakop sa payment processing.
+  /// (Cashier ang pangunahing nag-aayos ng bayad; admin ang nagdadala ng
+  /// contingency — hindi allowed ang waiter sa payment processing.)
   static bool canProcessPayment(String status, {String? role}) {
     final String normalizedRole = (role ?? '').trim().toUpperCase();
     final bool roleAllowed = normalizedRole == 'ADMIN' ||
-        normalizedRole == 'CASHIER' ||
-        normalizedRole == 'WAITER';
+        normalizedRole == 'CASHIER';
     if (!roleAllowed) return false;
     // Ang payment ay para sa orders na may outstanding balance; sa queue UI,
     // nakikita natin ang pay actions para sa SERVED na UNPAID orders.

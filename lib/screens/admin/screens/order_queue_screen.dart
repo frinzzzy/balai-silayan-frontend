@@ -928,7 +928,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
         (role == 'ADMIN' || role == 'WAITER' || role == 'KITCHEN') &&
         AdminService.isValidStatusTransition(status, 'DECLINED');
     final bool showPaymentActions =
-        (role == 'ADMIN' || role == 'CASHIER' || role == 'WAITER') &&
+        (role == 'ADMIN' || role == 'CASHIER') &&
         order.paymentMethod.toUpperCase() == 'UNPAID' &&
         (status == 'SERVED' || order.hasPendingBillRequest);
 
