@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'dart:async';
 import 'dart:convert';
 import '../models/admin_order_model.dart';
 import '../services/admin_service.dart';
@@ -39,6 +40,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
   String _searchQuery = '';
   final ScrollController _scrollController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
+  Timer? _checklistRefreshDebounce;
 
   int _getStatusPriority(String status) {
     switch (status.toUpperCase()) {
@@ -64,6 +66,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
 
   @override
   void dispose() {
+    _checklistRefreshDebounce?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
@@ -270,6 +273,15 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
         !terminalStatuses.contains(order.status.toUpperCase());
   }
 
+  /// Debounced refresh pagkatapos mag-check ng items. Hindi per-click ang
+  /// refresh para hindi mag-flicker ang checklist habang nagki-click ang staff.
+  void _scheduleChecklistRefresh() {
+    _checklistRefreshDebounce?.cancel();
+    _checklistRefreshDebounce = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) widget.onRefresh();
+    });
+  }
+
   Widget _buildChecklistNotesCallout(AdminOrder order, {bool enlarged = false}) {
     return Container(
       width: double.infinity,
@@ -329,6 +341,63 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                     color: order.hasAllergyNote
                         ? const Color(0xFF8E2A20)
                         : AdminTheme.textDark,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOrderNotFinishedBanner(
+    AdminOrder order, {
+    bool enlarged = false,
+  }) {
+    final int remaining = order.items.length - order.checkedItemCount;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+        horizontal: enlarged ? 16 : 12,
+        vertical: enlarged ? 14 : 10,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFE9E4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AdminTheme.danger, width: 1.5),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.pending_actions,
+            size: enlarged ? 24 : 18,
+            color: AdminTheme.danger,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'ORDER NOT FINISHED YET',
+                  style: TextStyle(
+                    fontSize: enlarged ? 13 : 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.6,
+                    color: AdminTheme.danger,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '$remaining item(s) still not finished. Complete all '
+                  'checklist items before marking this order as Ready.',
+                  style: TextStyle(
+                    fontSize: enlarged ? 15 : 11.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.35,
+                    color: const Color(0xFF8E2A20),
                   ),
                 ),
               ],
@@ -467,7 +536,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                             order: order,
                             canCheck: canCheck,
                             enlarged: true,
-                            onChanged: widget.onRefresh,
+                            onChanged: _scheduleChecklistRefresh,
                           ),
                         ],
                       ),
@@ -1144,8 +1213,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    '${order.items.length} checklist item(s) • '
-                    '${order.checkedItemCount} done',
+                    '${order.items.length} checklist item(s) • tap to open ticket',
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -1176,9 +1244,15 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                     role: AdminService.currentUser?.role,
                   ) &&
                   _isChecklistActive(order),
-              onChanged: widget.onRefresh,
+              onChanged: _scheduleChecklistRefresh,
               onEnlarge: () => _showChecklistDialog(context, order),
             ),
+            if (_isChecklistActive(order) &&
+                order.status.toUpperCase() == 'PREPARING' &&
+                !order.allItemsChecked) ...[
+              const SizedBox(height: 8),
+              _buildOrderNotFinishedBanner(order),
+            ],
           ] else
             Text(
               order.itemsDescription,
@@ -1220,7 +1294,8 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
         AdminService.isValidStatusTransition(status, 'PREPARING');
     final bool canMarkReady =
         (role == 'ADMIN' || role == 'KITCHEN') &&
-        AdminService.isValidStatusTransition(status, 'READY');
+        AdminService.isValidStatusTransition(status, 'READY') &&
+        (!order.hasChecklist || order.allItemsChecked);
     final bool canMarkServed =
         (role == 'ADMIN' || role == 'WAITER') &&
         AdminService.isValidStatusTransition(status, 'SERVED');
