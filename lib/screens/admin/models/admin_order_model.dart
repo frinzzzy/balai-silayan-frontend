@@ -13,19 +13,30 @@ class OrderAddon {
 }
 
 /// Single menu line item na naka-capture sa order (qty + unit price + addons).
+///
+/// May sariling checklist state ang bawat line item (`is_checked`) para
+/// ma-mark ng kitchen ang bawat putahe na tapos na.
 class OrderLine {
+  final int? id;
   final String name;
   final int quantity;
   final double unitPrice;
   final List<OrderAddon> addons;
   final double lineTotal;
+  final bool isChecked;
+  final DateTime? checkedAt;
+  final String checkedBy;
 
   const OrderLine({
+    this.id,
     required this.name,
     required this.quantity,
     required this.unitPrice,
     required this.addons,
     required this.lineTotal,
+    this.isChecked = false,
+    this.checkedAt,
+    this.checkedBy = '',
   });
 
   factory OrderLine.fromJson(Map<String, dynamic> json) {
@@ -41,12 +52,39 @@ class OrderLine {
               .toList()
         : <OrderAddon>[];
     final double addonSum = addons.fold(0.0, (sum, a) => sum + a.price);
+    final dynamic rawChecked = json['is_checked'];
+    final bool checked =
+        rawChecked == true ||
+        rawChecked == 1 ||
+        rawChecked?.toString().toLowerCase() == 'true';
     return OrderLine(
+      id: int.tryParse((json['id'] ?? '').toString()),
       name: (json['name'] ?? json['item_name'] ?? 'Dish').toString(),
       quantity: qty,
       unitPrice: unit,
       addons: addons,
       lineTotal: (unit + addonSum) * qty,
+      isChecked: checked,
+      checkedAt: DateTime.tryParse((json['checked_at'] ?? '').toString()),
+      checkedBy: (json['checked_by'] ?? '').toString(),
+    );
+  }
+
+  OrderLine copyWith({
+    bool? isChecked,
+    DateTime? checkedAt,
+    String? checkedBy,
+  }) {
+    return OrderLine(
+      id: id,
+      name: name,
+      quantity: quantity,
+      unitPrice: unitPrice,
+      addons: addons,
+      lineTotal: lineTotal,
+      isChecked: isChecked ?? this.isChecked,
+      checkedAt: checkedAt ?? this.checkedAt,
+      checkedBy: checkedBy ?? this.checkedBy,
     );
   }
 }
@@ -94,8 +132,42 @@ class AdminOrder {
     this.notes = '',
   });
 
+  AdminOrder copyWith({
+    String? status,
+    String? paymentMethod,
+    String? updatedAt,
+    List<OrderLine>? items,
+  }) {
+    return AdminOrder(
+      id: id,
+      tableNumber: tableNumber,
+      sessionId: sessionId,
+      itemsDescription: itemsDescription,
+      totalAmount: totalAmount,
+      status: status ?? this.status,
+      paymentMethod: paymentMethod ?? this.paymentMethod,
+      updatedAt: updatedAt ?? this.updatedAt,
+      billRequestedAt: billRequestedAt,
+      items: items ?? this.items,
+      createdAt: createdAt,
+      parentOrderId: parentOrderId,
+      isAdditional: isAdditional,
+      notes: notes,
+    );
+  }
+
   /// May note ba ang customer na dapat makita agad ng kitchen?
   bool get hasNotes => notes.trim().isNotEmpty;
+
+  /// May checklist bang maipapakita para sa order na ito?
+  bool get hasChecklist => items.isNotEmpty;
+
+  /// Ilan sa mga item ang na-check na ng kitchen?
+  int get checkedItemCount => items.where((item) => item.isChecked).length;
+
+  /// Kumpleto na ba ang checklist (lahat ng item checked)?
+  bool get allItemsChecked =>
+      items.isNotEmpty && checkedItemCount == items.length;
 
   /// Allergy-related ba ang note? Kapag oo, pula (hindi amber) ang callout.
   bool get hasAllergyNote {

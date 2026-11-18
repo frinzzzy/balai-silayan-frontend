@@ -185,6 +185,40 @@ class AdminService {
     return status.trim().toUpperCase() == 'SERVED';
   }
 
+  /// ADMIN / WAITER / KITCHEN lang ang pwedeng mag-check ng bawat order item.
+  static bool canCheckOrderItems({String? role}) {
+    final String normalizedRole = (role ?? '').trim().toUpperCase();
+    return normalizedRole == 'ADMIN' ||
+        normalizedRole == 'WAITER' ||
+        normalizedRole == 'KITCHEN';
+  }
+
+  /// PATCH /api/v1/orders/:order_id/items/:item_id/check
+  /// I-toggle ang checklist ng isang order item (kitchen marks done).
+  Future<bool> setOrderItemChecked({
+    required int orderId,
+    required int itemId,
+    required bool checked,
+    bool isApiConnected = true,
+  }) async {
+    if (!isApiConnected) {
+      await Future.delayed(const Duration(milliseconds: 120));
+      return true;
+    }
+
+    try {
+      final response = await http.patch(
+        Uri.parse('$_baseUrl/api/v1/orders/$orderId/items/$itemId/check'),
+        headers: _authHeaders,
+        body: jsonEncode({"checked": checked}),
+      ).timeout(const Duration(seconds: 15));
+      return response.statusCode == 200 || response.statusCode == 201;
+    } catch (e) {
+      debugPrint('Error updating order item checklist via API: $e');
+    }
+    return false;
+  }
+
   /// PATCH /api/v1/orders/:id/status
   Future<bool> updateOrderStatus({
     required int orderId,

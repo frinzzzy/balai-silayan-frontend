@@ -6,6 +6,7 @@ import '../services/admin_service.dart';
 import '../../../config/api_config.dart';
 import 'receipt_ticket_dialog.dart';
 import 'payment_dialog_widget.dart';
+import '../widgets/order_item_checklist.dart';
 import '../../../theme/app_theme.dart';
 import '../../../theme/admin_tokens.dart';
 import '../../../utils/currency.dart';
@@ -251,7 +252,257 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
     return 'DINNER SERVICE';
   }
 
-  String get _dateLabel => '${DateTime.now().month}/${DateTime.now().day}/${DateTime.now().year}';
+  String get _dateLabel =>
+      '${DateTime.now().month}/${DateTime.now().day}/${DateTime.now().year}';
+
+  /// Aktibo pa ba ang order para maipakita ang checklist?
+  bool _isChecklistActive(AdminOrder order) {
+    const Set<String> terminalStatuses = <String>{
+      'PAID',
+      'COMPLETED',
+      'CLOSED',
+      'SETTLED',
+      'CANCELLED',
+      'DECLINED',
+      'REJECTED',
+    };
+    return order.hasChecklist &&
+        !terminalStatuses.contains(order.status.toUpperCase());
+  }
+
+  Widget _buildChecklistNotesCallout(AdminOrder order, {bool enlarged = false}) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+        horizontal: enlarged ? 16 : 12,
+        vertical: enlarged ? 14 : 10,
+      ),
+      decoration: BoxDecoration(
+        color: order.hasAllergyNote
+            ? const Color(0xFFFBE0DC)
+            : const Color(0xFFFFF4D6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: order.hasAllergyNote
+              ? AdminTheme.danger
+              : AdminTheme.goldAccent,
+          width: 1.5,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            order.hasAllergyNote
+                ? Icons.warning_amber_rounded
+                : Icons.sticky_note_2,
+            size: enlarged ? 24 : 18,
+            color: order.hasAllergyNote
+                ? AdminTheme.danger
+                : AdminTheme.priorityFg,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  order.hasAllergyNote
+                      ? 'ALLERGY • SPECIAL INSTRUCTIONS'
+                      : 'SPECIAL INSTRUCTIONS',
+                  style: TextStyle(
+                    fontSize: enlarged ? 12 : 9.5,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.6,
+                    color: order.hasAllergyNote
+                        ? AdminTheme.danger
+                        : AdminTheme.priorityFg,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  order.notes,
+                  style: TextStyle(
+                    fontSize: enlarged ? 17 : 13,
+                    fontWeight: FontWeight.w700,
+                    height: 1.3,
+                    color: order.hasAllergyNote
+                        ? const Color(0xFF8E2A20)
+                        : AdminTheme.textDark,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChecklistBillBanner(AdminOrder order) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7E8CE),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AdminTheme.goldAccent),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.receipt_long,
+            size: 20,
+            color: AdminTheme.priorityFg,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'BILL REQUESTED • Awaiting settlement',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: AdminTheme.priorityFg,
+              ),
+            ),
+          ),
+          Text(
+            '₱${order.totalAmount.toStringAsFixed(2)}',
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+              color: AdminTheme.textDark,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Malaking full-screen checklist view para sa kitchen (at waiter/admin).
+  /// Kasama pa rin dito ang special note at bill-requested state ng order.
+  void _showChecklistDialog(BuildContext context, AdminOrder order) {
+    final bool canCheck = AdminService.canCheckOrderItems(
+      role: AdminService.currentUser?.role,
+    );
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          backgroundColor: AdminTheme.surfaceIvory,
+          insetPadding: const EdgeInsets.all(12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760, maxHeight: 900),
+            child: SizedBox(
+              height: MediaQuery.sizeOf(ctx).height * 0.9,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 10, 12),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.restaurant_menu,
+                          size: 28,
+                          color: AdminTheme.priorityFg,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'KITCHEN CHECKLIST',
+                                style: TextStyle(
+                                  fontSize: 19,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 0.8,
+                                  color: AdminTheme.textDark,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Order #BS-${order.id} • Table '
+                                '${order.tableNumber.toString().padLeft(2, '0')}',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AdminTheme.mutedDark,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          icon: const Icon(
+                            Icons.close,
+                            color: AdminTheme.textDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1, color: AdminTheme.border),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (order.hasNotes) ...[
+                            _buildChecklistNotesCallout(order, enlarged: true),
+                            const SizedBox(height: 14),
+                          ],
+                          if (order.hasPendingBillRequest) ...[
+                            _buildChecklistBillBanner(order),
+                            const SizedBox(height: 14),
+                          ],
+                          OrderItemChecklist(
+                            order: order,
+                            canCheck: canCheck,
+                            enlarged: true,
+                            onChanged: widget.onRefresh,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AdminTheme.textDark,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text(
+                          'Done',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   Widget _buildKpiStrip() {
     final int activeCount = widget.orders.where((o) {
@@ -881,10 +1132,35 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AdminTheme.textDark),
           ),
           const SizedBox(height: 8),
-          Text(
-            order.itemsDescription,
-            style: const TextStyle(fontSize: 13, color: AdminTheme.infoText),
-          ),
+          if (_isChecklistActive(order)) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${order.items.length} item(s) • ${order.checkedItemCount} done',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AdminTheme.infoText,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            OrderItemChecklist(
+              order: order,
+              canCheck: AdminService.canCheckOrderItems(
+                role: AdminService.currentUser?.role,
+              ),
+              onChanged: widget.onRefresh,
+              onEnlarge: () => _showChecklistDialog(context, order),
+            ),
+          ] else
+            Text(
+              order.itemsDescription,
+              style: const TextStyle(fontSize: 13, color: AdminTheme.infoText),
+            ),
           const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
