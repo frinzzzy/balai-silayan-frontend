@@ -462,6 +462,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
         setState(() {
           _isLoggedIn = true;
+          _currentTabIndex = 0;
         });
         // I-register ang device bilang staff para may FCM push alerts kahit
         // naka-background o patay ang app.
@@ -839,34 +840,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ),
             ],
           ),
-          bottomNavigationBar: isDesktop
-              ? null
-              : NavigationBar(
-                  backgroundColor: AdminTheme.deepGreen,
-                  indicatorColor: AdminTheme.goldAccent,
-                  selectedIndex: _currentTabIndex,
-                  onDestinationSelected: (idx) =>
-                      setState(() => _currentTabIndex = idx),
-                  destinations: [
-                    NavigationDestination(
-                      icon: Icon(Icons.receipt_long_outlined),
-                      label: 'Order Queue',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.analytics_outlined),
-                      label: 'Sales Analytics',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.inventory_2_outlined),
-                      label: 'Stock Mgmt',
-                    ),
-                    if (AdminService.isAdmin)
-                      NavigationDestination(
-                        icon: Icon(Icons.groups_2_outlined),
-                        label: 'Staff',
-                      ),
-                  ],
-                ),
+          bottomNavigationBar: isDesktop ? null : _buildMobileNav(),
         );
       },
     );
@@ -916,6 +890,62 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           Skeleton(width: double.infinity, height: 12, radius: 6),
         ],
       ),
+    );
+  }
+
+  /// Role-based na listahan ng navigation tabs (mobile at desktop pareho).
+  List<int> _allowedTabIndexes() {
+    final String role = (AdminService.currentUser?.role ?? '').toUpperCase();
+    switch (role) {
+      case 'ADMIN':
+        return const <int>[0, 1, 2, 3];
+      case 'KITCHEN':
+      case 'WAITER':
+        return const <int>[0, 2];
+      case 'CASHIER':
+      default:
+        return const <int>[0];
+    }
+  }
+
+  Widget _buildMobileNav() {
+    final List<int> allowed = _allowedTabIndexes();
+    final int selectedPosition = allowed.contains(_currentTabIndex)
+        ? allowed.indexOf(_currentTabIndex)
+        : 0;
+
+    return NavigationBar(
+      backgroundColor: AdminTheme.deepGreen,
+      indicatorColor: AdminTheme.goldAccent,
+      selectedIndex: selectedPosition,
+      onDestinationSelected: (int position) {
+        if (position < 0 || position >= allowed.length) return;
+        setState(() => _currentTabIndex = allowed[position]);
+      },
+      destinations: allowed.map((int index) {
+        switch (index) {
+          case 1:
+            return const NavigationDestination(
+              icon: Icon(Icons.analytics_outlined),
+              label: 'Sales Analytics',
+            );
+          case 2:
+            return const NavigationDestination(
+              icon: Icon(Icons.inventory_2_outlined),
+              label: 'Stock Mgmt',
+            );
+          case 3:
+            return const NavigationDestination(
+              icon: Icon(Icons.groups_2_outlined),
+              label: 'Staff',
+            );
+          default:
+            return const NavigationDestination(
+              icon: Icon(Icons.receipt_long_outlined),
+              label: 'Order Queue',
+            );
+        }
+      }).toList(),
     );
   }
 

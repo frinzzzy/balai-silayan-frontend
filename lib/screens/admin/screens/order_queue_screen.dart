@@ -381,9 +381,11 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
   /// Malaking full-screen checklist view para sa kitchen (at waiter/admin).
   /// Kasama pa rin dito ang special note at bill-requested state ng order.
   void _showChecklistDialog(BuildContext context, AdminOrder order) {
-    final bool canCheck = AdminService.canCheckOrderItems(
-      role: AdminService.currentUser?.role,
-    );
+    final bool canCheck =
+        AdminService.canCheckOrderItems(
+          role: AdminService.currentUser?.role,
+        ) &&
+        _isChecklistActive(order);
 
     showDialog<void>(
       context: context,
@@ -944,7 +946,12 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           width: isPriority ? 2.0 : 1.0,
         ),
       ),
-      child: Column(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: order.hasChecklist
+            ? () => _showChecklistDialog(context, order)
+            : null,
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
@@ -1132,12 +1139,13 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AdminTheme.textDark),
           ),
           const SizedBox(height: 8),
-          if (_isChecklistActive(order)) ...[
+          if (order.hasChecklist) ...[
             Row(
               children: [
                 Expanded(
                   child: Text(
-                    '${order.items.length} item(s) • ${order.checkedItemCount} done',
+                    '${order.items.length} checklist item(s) • '
+                    '${order.checkedItemCount} done',
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -1145,14 +1153,29 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                     ),
                   ),
                 ),
+                TextButton.icon(
+                  onPressed: () => _showChecklistDialog(context, order),
+                  icon: const Icon(Icons.open_in_full, size: 15),
+                  label: const Text(
+                    'View ticket',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AdminTheme.priorityFg,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    minimumSize: const Size(0, 30),
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             OrderItemChecklist(
               order: order,
-              canCheck: AdminService.canCheckOrderItems(
-                role: AdminService.currentUser?.role,
-              ),
+              canCheck:
+                  AdminService.canCheckOrderItems(
+                    role: AdminService.currentUser?.role,
+                  ) &&
+                  _isChecklistActive(order),
               onChanged: widget.onRefresh,
               onEnlarge: () => _showChecklistDialog(context, order),
             ),
@@ -1183,6 +1206,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             style: TextStyle(fontSize: 11, color: AdminTheme.mutedDark),
           ),
         ],
+        ),
       ),
     );
   }
