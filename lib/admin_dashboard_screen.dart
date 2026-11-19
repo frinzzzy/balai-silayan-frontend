@@ -601,8 +601,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     String? declineReason,
   }) {
     final String timeNow = '${TimeOfDay.now().format(context)} • Today';
+    final int index = _orders.indexWhere((o) => o.id == orderId);
+
+    // I-save ang dating state para ma-revert kung tanggihan ng backend
+    // (hal. hindi pa kompleto ang checklist o invalid status transition).
+    final String? previousStatus = index == -1 ? null : _orders[index].status;
+    final String? previousPaymentMethod =
+        index == -1 ? null : _orders[index].paymentMethod;
+    final String? previousUpdatedAt =
+        index == -1 ? null : _orders[index].updatedAt;
+
     setState(() {
-      final index = _orders.indexWhere((o) => o.id == orderId);
       if (index != -1) {
         _orders[index].status = targetStatus;
         if (paymentMethod != null) {
@@ -624,32 +633,59 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         updatedAt: '',
       ),
     );
-    if (targetStatus == 'PAID') {
-      _adminService.processPayment(
-        orderId: orderId,
-        paymentMethod: paymentMethod ?? currentOrder.paymentMethod,
-        amountPaid: currentOrder.totalAmount,
-        isApiConnected: _isApiConnected,
-      );
-    } else {
-      _adminService.updateOrderStatus(
-        orderId: orderId,
-        status: targetStatus,
-        paymentMethod: currentOrder.paymentMethod,
-        declineReason: declineReason,
-        isApiConnected: _isApiConnected,
-      ).then((bool ok) {
-        if (!mounted) return;
-        if (!ok) {
-          // Halimbawa: invalid status transition (409) o transient failure.
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Could not update the order status. Please refresh the queue.'),
-              backgroundColor: Color(0xFF8E5136),
-            ),
-          );
-        }
+
+    void revertOptimisticUpdate() {
+      if (index == -1 ||
+          index >= _orders.length ||
+          _orders[index].id != orderId) {
+        return;
+      }
+      setState(() {
+        _orders[index].status = previousStatus ?? _orders[index].status;
+        _orders[index].paymentMethod =
+            previousPaymentMethod ?? _orders[index].paymentMethod;
+        _orders[index].updatedAt =
+            previousUpdatedAt ?? _orders[index].updatedAt;
       });
+    }
+
+    if (targetStatus == 'PAID') {
+      _adminService
+          .processPayment(
+            orderId: orderId,
+            paymentMethod: paymentMethod ?? currentOrder.paymentMethod,
+            amountPaid: currentOrder.totalAmount,
+            isApiConnected: _isApiConnected,
+          )
+          .then((bool ok) {
+            if (!mounted || ok) return;
+            revertOptimisticUpdate();
+          });
+    } else {
+      _adminService
+          .updateOrderStatus(
+            orderId: orderId,
+            status: targetStatus,
+            paymentMethod: currentOrder.paymentMethod,
+            declineReason: declineReason,
+            isApiConnected: _isApiConnected,
+          )
+          .then((bool ok) {
+            if (!mounted) return;
+            if (!ok) {
+              // Halimbawa: checklist not finished (409) or invalid transition.
+              revertOptimisticUpdate();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    AdminService.lastOrderStatusError ??
+                        'Could not update the order status. Please refresh the queue.',
+                  ),
+                  backgroundColor: const Color(0xFF8E5136),
+                ),
+              );
+            }
+          });
     }
   }
 

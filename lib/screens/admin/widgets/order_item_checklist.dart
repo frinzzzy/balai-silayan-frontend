@@ -65,6 +65,41 @@ class _OrderItemChecklistState extends State<OrderItemChecklist> {
 
   String get _staffLabel => AdminService.staffName ?? 'Staff';
 
+  /// Friendly food emoji para sa bawat checklist item — mas madaling
+  /// makita at mas friendly para sa kitchen staff.
+  String _emojiForItem(String name) {
+    final String normalized = name.toLowerCase();
+    const List<MapEntry<String, String>> entries = <MapEntry<String, String>>[
+      MapEntry('chopsuey', '🥘'),
+      MapEntry('pancit', '🍜'),
+      MapEntry('bihon', '🍚'),
+      MapEntry('sinigang', '🍲'),
+      MapEntry('fried chicken', '🍗'),
+      MapEntry('chicken', '🍗'),
+      MapEntry('pork chop', '🥩'),
+      MapEntry('pork', '🥩'),
+      MapEntry('beef', '🥩'),
+      MapEntry('grilled', '🍖'),
+      MapEntry('bbq', '🍖'),
+      MapEntry('steak', '🥩'),
+      MapEntry('fish', '🐟'),
+      MapEntry('salmon', '🐟'),
+      MapEntry('seafood', '🐟'),
+      MapEntry('shrimp', '🦐'),
+      MapEntry('soup', '🍲'),
+      MapEntry('salad', '🥗'),
+      MapEntry('egg', '🍳'),
+      MapEntry('tamale', '🌽'),
+      MapEntry('siopao', '🥟'),
+    ];
+    for (final MapEntry<String, String> entry in entries) {
+      if (normalized.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+    return '🍽️';
+  }
+
   void _showError() {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       const SnackBar(
@@ -302,6 +337,27 @@ class _OrderItemChecklistState extends State<OrderItemChecklist> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
+                    Container(
+                      width: widget.enlarged ? 34 : 30,
+                      height: widget.enlarged ? 34 : 30,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: item.isChecked
+                            ? const Color(0xFFE1F1E5)
+                            : const Color(0xFFF6EFE2),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: item.isChecked
+                              ? const Color(0xFF8ABF97)
+                              : AdminTheme.border,
+                        ),
+                      ),
+                      child: Text(
+                        _emojiForItem(item.name),
+                        style: TextStyle(fontSize: widget.enlarged ? 18 : 15),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Transform.scale(
                       scale: boxScale,
                       child: Checkbox(

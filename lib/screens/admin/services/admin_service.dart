@@ -10,6 +10,10 @@ class AdminService {
   static String? staffAuthToken;
   static String? staffName;
 
+  /// Huling error message mula sa status update (hal. checklist not finished).
+  /// Ipinapakita ito sa snackbar para malinaw sa staff kung bakit na-block.
+  static String? lastOrderStatusError;
+
   /// Ang naka-login na staff account (galing sa `/auth/login` o `/auth/me`).
   /// Ito ang source of truth para sa role-based UI.
   static StaffUser? currentUser;
@@ -245,9 +249,24 @@ class AdminService {
         headers: _authHeaders,
         body: jsonEncode(body),
       ).timeout(const Duration(seconds: 15));
-      return response.statusCode == 200 || response.statusCode == 201;
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        lastOrderStatusError = null;
+        return true;
+      }
+
+      try {
+        final dynamic decoded = jsonDecode(response.body);
+        lastOrderStatusError = decoded is Map
+            ? (decoded['message'] ?? decoded['error'])?.toString()
+            : null;
+      } catch (_) {
+        lastOrderStatusError = null;
+      }
+      return false;
     } catch (e) {
       debugPrint('Error updating order status via API: $e');
+      lastOrderStatusError = 'Connection error. Please try again.';
     }
     return false;
   }
