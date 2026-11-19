@@ -755,6 +755,12 @@ class _MenuScreenState extends State<MenuScreen> {
 
   void _handleTableOrderFinished(dynamic eventPayloadData) {
     if (!mounted) return;
+
+    // Huwag mag-pop-up habang nasa Order Type Selection (browsingTickets) ang
+    // customer — listahan lang ang dapat makita doon.
+    if (OrderContext.instance.mode == CustomerOrderMode.browsingTickets) {
+      return;
+    }
     
     // Strict Scoping check before showing finished dialog
     if (eventPayloadData != null) {
@@ -806,7 +812,10 @@ class _MenuScreenState extends State<MenuScreen> {
       if (!mounted) return;
       FinishedOrderDialog.show(
         orderCode: resolvedOrderCode,
-        orderId: UserSession.formatOrderCode(resolvedOrderId ?? UserSession.lastPlacedOrderId),
+        orderId: (resolvedOrderId ?? UserSession.lastPlacedOrderId ?? '').toString(),
+        // session_closed/session_cancelled event = tapos na ang buong table
+        // session, kaya "Session Finished → Scan QR Again" ang ipakita.
+        forceSessionFinished: true,
       );
     });
   }

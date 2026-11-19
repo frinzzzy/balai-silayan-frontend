@@ -1,5 +1,10 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
 
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+import '../config/api_config.dart';
+import '../qr_scanner_screen.dart';
 import '../user_session.dart';
 import '../services/customer_navigation.dart';
 import '../services/notification_center.dart';
@@ -36,6 +41,7 @@ class FinishedOrderDialog {
     OrderOutcome outcome = OrderOutcome.finished,
     String? reason,
     String? message,
+    bool forceSessionFinished = false,
   }) async {
     if (_isShowing) return false;
     final BuildContext? rootContext =
@@ -48,6 +54,13 @@ class FinishedOrderDialog {
 
     _isShowing = true;
     try {
+      // Kapag ang huling ticket na lang ang natapos (wala nang ibang active
+      // order sa session), session-finished ang ipakita — hindi "Back to Menu".
+      final bool sessionFinished = !isDeclined &&
+          (forceSessionFinished || await _isSessionFinished(orderId));
+
+      if (!rootContext.mounted) return false;
+
       final bool? goBack = await showDialog<bool>(
         context: rootContext,
         barrierDismissible: false,
@@ -55,7 +68,11 @@ class FinishedOrderDialog {
           backgroundColor: const Color(0xFFFFFDFA),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           title: Text(
-            isDeclined ? 'Order Declined' : 'Finished Order',
+            isDeclined
+                ? 'Order Declined'
+                : sessionFinished
+                    ? 'Session Finished'
+                    : 'Finished Order',
             style: TextStyle(
               fontWeight: FontWeight.bold,
               color: isDeclined
@@ -98,8 +115,11 @@ class FinishedOrderDialog {
                   ],
                 )
               : Text(
-                  message ??
-                      'Na-settle na ang ticket $orderCode. Kailangan mo nang bumalik sa order choices para magpatuloy.',
+                  sessionFinished
+                      ? 'This table session is finished. Salamat sa paghain! '
+                          'I-scan muli ang QR code ng table para magsimula ng bagong session.'
+                      : message ??
+                          'Na-settle na ang ticket $orderCode. Kailangan mo nang bumalik sa order choices para magpatuloy.',
                   style: const TextStyle(
                     fontSize: 13,
                     color: Color(0xFF203F35),
@@ -115,8 +135,8 @@ class FinishedOrderDialog {
                 ),
               ),
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text(
-                'Back to Menu',
+              child: Text(
+                sessionFinished ? 'Scan QR Again' : 'Back to Menu',
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
@@ -125,15 +145,94 @@ class FinishedOrderDialog {
       );
 
       if (goBack == true) {
-        _returnToOrderChoices(
-          orderCode: orderCode,
-          showSessionClosedBanner: !isDeclined,
-        );
+        if (sessionFinished) {
+          _returnToQrScan();
+        } else {
+          _returnToOrderChoices(
+            orderCode: orderCode,
+            showSessionClosedBanner: !isDeclined,
+          );
+        }
       }
       return true;
     } finally {
       _isShowing = false;
     }
+  }
+
+  /// `true` kapag wala nang ibang active order sa session — ibig sabihin,
+  /// ang katatapos lang na ticket ay ang huling order ng table.
+  static Future<bool> _isSessionFinished(dynamic orderId) async {
+    final int? tableId =
+        UserSession.activeTableId ?? UserSession.activeTableNumber;
+    final int? sessionId = UserSession.activeSessionId ??
+        int.tryParse(UserSession.sessionId ?? '');
+    if (tableId == null && sessionId == null) return false;
+
+    try {
+      final String query = <String>[
+        if (tableId != null) 'table_id=$tableId',
+        if (sessionId != null) 'session_id=$sessionId',
+      ].join('&');
+      final http.Response response = await http
+          .get(
+            Uri.parse(
+              '${ApiConfig.baseUrl}/api/v1/customer/orders/live?$query',
+            ),
+          )
+          .timeout(const Duration(seconds: 6));
+
+      if (response.statusCode != 200) return false;
+
+      final dynamic decoded = jsonDecode(response.body);
+      final dynamic rawData = decoded is Map
+          ? (decoded['data'] ?? decoded['orders'] ?? decoded)
+          : decoded;
+      final List<dynamic> orders =
+          rawData is List ? rawData : const <dynamic>[];
+
+      // Tanggalin sa count ang mismong katatapos na ticket — puwedeng nauna
+      // pang bumalik ito sa live query bago mag-commit ang payment.
+      final String finishedId = _normalizeOrderId(orderId);
+      final bool hasOtherActiveOrder = orders.any((dynamic raw) {
+        if (raw is! Map) return true;
+        final String id = _normalizeOrderId(raw['order_id'] ?? raw['id']);
+        if (finishedId.isNotEmpty && id == finishedId) return false;
+        return true;
+      });
+
+      return !hasOtherActiveOrder;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _normalizeOrderId(dynamic value) {
+    return (value?.toString() ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+  }
+
+  /// Session finished: i-clear ang lumang session at dalhin ang customer sa
+  /// QR scanner para makapagsimula ng bagong table session.
+  static void _returnToQrScan() {
+    UserSession.clearSession();
+    UserSession.clearAllBillRequests();
+    UserSession.isAdditionalOrder = false;
+    UserSession.targetParentOrderId = null;
+    UserSession.lastPlacedOrderId = null;
+    UserSession.firstOrderId = null;
+    UserSession.autoAdditionalParentId = null;
+    OrderContext.instance.reset();
+
+    final BuildContext? rootContext =
+        NotificationCenter.navigatorKey.currentContext;
+    if (rootContext == null) return;
+
+    Navigator.of(rootContext).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder: (_) => const QrScannerScreen(),
+      ),
+      (route) => route.isFirst,
+    );
   }
 
   static void _returnToOrderChoices({

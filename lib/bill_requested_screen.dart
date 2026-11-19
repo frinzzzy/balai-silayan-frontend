@@ -3,9 +3,11 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
+import 'qr_scanner_screen.dart';
 import 'user_session.dart';
 import '../widgets/customer_bottom_nav.dart';
 import 'services/global_socket_listener.dart';
+import 'services/order_context.dart';
 import 'services/customer_navigation.dart';
 import 'config/api_config.dart';
 import 'utils/currency.dart';
@@ -155,17 +157,24 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFFFFFDFA),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Payment Confirmed', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35))),
-        content: const Text('Na-confirm na ng staff ang iyong bayad. Maraming salamat sa paghain sa Balai Silayan!'),
+        title: const Text(
+          'Session Finished',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+        ),
+        content: const Text(
+          'Tapos na ang table session na ito. I-scan muli ang table QR code para magsimula ng bagong session. Salamat sa paghain sa Balai Silayan!',
+        ),
         actions: [
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
             onPressed: () {
               Navigator.pop(ctx);
-              UserSession.clearSession();
-              _goToMenu();
+              _goToQrScan();
             },
-            child: const Text('Back to Menu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            child: const Text(
+              'Scan QR Again',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
@@ -186,6 +195,25 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
       tableId: tableNum,
       tableNumber: tableNum,
       isAdditionalOrder: UserSession.isAdditionalOrder,
+    );
+  }
+
+  /// Kapag tapos na ang buong table session, i-clear ang lumang state at
+  /// dalhin ang customer sa QR scanner para sa bagong session.
+  void _goToQrScan() {
+    UserSession.clearSession();
+    UserSession.clearAllBillRequests();
+    UserSession.isAdditionalOrder = false;
+    UserSession.targetParentOrderId = null;
+    UserSession.lastPlacedOrderId = null;
+    UserSession.firstOrderId = null;
+    UserSession.autoAdditionalParentId = null;
+    OrderContext.instance.reset();
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder: (_) => const QrScannerScreen(),
+      ),
+      (route) => route.isFirst,
     );
   }
 
@@ -277,7 +305,8 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             ),
             const SizedBox(height: 20),
             const Text(
-              'SESSION SETTLED',
+              'THIS TABLE SESSION IS FINISHED',
+              textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
@@ -297,7 +326,8 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
             ),
             const SizedBox(height: 10),
             const Text(
-              'Tapos na ang bill request para sa session na ito. Wala nang kailangang i-request muli.',
+              'Tapos na ang session para sa table na ito. I-scan muli ang table '
+              'QR code para magsimula ng bagong session.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 13,
@@ -317,9 +347,9 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
                   ),
                   elevation: 0,
                 ),
-                onPressed: _goToMenu,
+                onPressed: _goToQrScan,
                 child: const Text(
-                  'Back to Menu',
+                  'Scan QR Again',
                   style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,

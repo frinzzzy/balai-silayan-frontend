@@ -16,6 +16,7 @@ import 'services/order_event_router.dart';
 import 'services/customer_navigation.dart';
 import 'config/api_config.dart';
 import 'order_type_selection_screen.dart';
+import 'qr_scanner_screen.dart';
 import 'utils/currency.dart';
 
 class OrderStatusScreen extends StatefulWidget {
@@ -371,12 +372,16 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      final dynamic rawOrderId = widget.orderId ??
+          UserSession.lastPlacedOrderId ??
+          UserSession.targetParentOrderId;
       unawaited(
         FinishedOrderDialog.show(
           orderCode: orderCode,
-          orderId: UserSession.formatOrderCode(
-            widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId,
-          ),
+          orderId: (rawOrderId ?? '').toString(),
+          // Session-closed event = buong table session ang tapos na, kaya
+          // direkta nang "Session Finished → Scan QR Again" ang ipakita.
+          forceSessionFinished: true,
         ),
       );
     });
@@ -572,6 +577,25 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     );
   }
 
+  /// Session settled/closed: linisin ang lumang session at dalhin sa QR
+  /// scanner para makapagsimula ng bagong table session.
+  void _navigateToQrScan() {
+    UserSession.clearSession();
+    UserSession.clearAllBillRequests();
+    UserSession.isAdditionalOrder = false;
+    UserSession.targetParentOrderId = null;
+    UserSession.lastPlacedOrderId = null;
+    UserSession.firstOrderId = null;
+    UserSession.autoAdditionalParentId = null;
+    OrderContext.instance.reset();
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder: (_) => const QrScannerScreen(),
+      ),
+      (route) => route.isFirst,
+    );
+  }
+
   /// Bumalik sa Order Type Selection (New Order / Additional Order / Request
   /// Bill) pagkatapos mag-order, imbes na dumiretso sa Menu.
   void _navigateToOrderSelection() {
@@ -635,6 +659,8 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                   color: Color(0xFF203F35),
                 ),
               )
+                  : _sessionWasClosed
+                  ? _buildSessionFinishedView()
                   : !_hasActiveOrder
                   ? _buildNoOrderView()
                   : SingleChildScrollView(
@@ -709,6 +735,97 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
             child: const Text(
               'Retry',
               style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Buong table session ang tapos na — hikayatin ang customer na mag-scan
+  /// muli ng QR para makapagsimula ng bagong session.
+  Widget _buildSessionFinishedView() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 84,
+            height: 84,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAF0E9),
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFF53766C)),
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.qr_code_scanner,
+                size: 38,
+                color: Color(0xFF203F35),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'THIS TABLE SESSION IS FINISHED',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFFA47C3D),
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Salamat sa paghain!',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF203F35),
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Tapos na ang session para sa table na ito. I-scan muli ang table '
+            'QR code para magsimula ng bagong session.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              color: Color(0xFF788078),
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 28),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF203F35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                elevation: 0,
+              ),
+              onPressed: _navigateToQrScan,
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.qr_code_scanner, color: Colors.white, size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    'Scan QR Again',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

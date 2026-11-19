@@ -133,20 +133,27 @@ class OrderEventRouter {
       debugPrint('⚠️ [OrderEventRouter] banner error: $e');
     }
 
-    // 2. Pop-up policy — tanging para sa konektadong ticket.
+    // 2. Pop-up policy — tanging para sa konektadong ticket. Habang nasa
+    //    Order Type Selection (browsingTickets) ang customer, huwag mag-pop-up
+    //    ng finished/declined dialog — listahan lang ang dapat makita doon.
+    final CustomerOrderMode currentMode = OrderContext.instance.mode;
+    final bool isBrowsingSelection =
+        currentMode == CustomerOrderMode.browsingTickets;
     final bool isRelevant = OrderContext.instance.isTicketRelevant(
       orderId,
       eventParentOrderId: parentOrderId,
     );
 
-    if (isRelevant && _terminalStatuses.contains(normalized)) {
+    if (!isBrowsingSelection && isRelevant && _terminalStatuses.contains(normalized)) {
       unawaited(_maybeShowOutcomeDialog(
         orderCode: displayCode,
         orderId: orderId,
         outcome: OrderOutcome.finished,
         reason: reason,
       ));
-    } else if (isRelevant && _declinedStatuses.contains(normalized)) {
+    } else if (!isBrowsingSelection &&
+        isRelevant &&
+        _declinedStatuses.contains(normalized)) {
       unawaited(_maybeShowOutcomeDialog(
         orderCode: displayCode,
         orderId: orderId,
