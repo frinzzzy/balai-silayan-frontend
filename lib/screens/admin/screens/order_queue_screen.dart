@@ -363,44 +363,29 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
         vertical: enlarged ? 14 : 10,
       ),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFE9E4),
+        color: const Color(0xFFFFF7E6),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AdminTheme.danger, width: 1.5),
+        border: Border.all(color: const Color(0xFFE5D3A3), width: 1.2),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
-            Icons.pending_actions,
-            size: enlarged ? 24 : 18,
-            color: AdminTheme.danger,
+            Icons.checklist_rtl,
+            size: enlarged ? 22 : 17,
+            color: AdminTheme.priorityFg,
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'ORDER NOT FINISHED YET',
-                  style: TextStyle(
-                    fontSize: enlarged ? 13 : 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.6,
-                    color: AdminTheme.danger,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  '$remaining item(s) still not finished. Complete all '
-                  'checklist items before marking this order as Ready.',
-                  style: TextStyle(
-                    fontSize: enlarged ? 15 : 11.5,
-                    fontWeight: FontWeight.w700,
-                    height: 1.35,
-                    color: const Color(0xFF8E2A20),
-                  ),
-                ),
-              ],
+            child: Text(
+              'Hintay lang — $remaining item(s) pa ang hindi naka-check. '
+              'Kumpletuhin lahat ng checklist items para ma-mark as Ready.',
+              style: TextStyle(
+                fontSize: enlarged ? 15 : 11.5,
+                fontWeight: FontWeight.w600,
+                height: 1.35,
+                color: AdminTheme.textDark,
+              ),
             ),
           ),
         ],
@@ -1294,8 +1279,9 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
         AdminService.isValidStatusTransition(status, 'PREPARING');
     final bool canMarkReady =
         (role == 'ADMIN' || role == 'KITCHEN') &&
-        AdminService.isValidStatusTransition(status, 'READY') &&
-        (!order.hasChecklist || order.allItemsChecked);
+        AdminService.isValidStatusTransition(status, 'READY');
+    final bool checklistComplete =
+        !order.hasChecklist || order.allItemsChecked;
     final bool canMarkServed =
         (role == 'ADMIN' || role == 'WAITER') &&
         AdminService.isValidStatusTransition(status, 'SERVED');
@@ -1349,24 +1335,71 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
 
     if (status == 'PREPARING') {
       if (canMarkReady) {
-        return SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AdminTheme.textDark,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              padding: const EdgeInsets.symmetric(vertical: 12),
+        final Widget declineButton = OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AdminTheme.danger,
+            side: const BorderSide(color: AdminTheme.border),
+            backgroundColor: AdminTheme.surfaceIvory,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
             ),
-            onPressed: () => _showConfirmationDialog(
-              context,
-              'Mark Order #${order.id} as Ready?',
-              'Confirm that this order is ready to be served to Table #${order.tableNumber}?',
-              () => widget.onActionTriggered(order.id, 'READY'),
-            ),
-            child: const Text('Mark as Ready', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+            padding: const EdgeInsets.symmetric(vertical: 12),
           ),
+          onPressed: () => _showDeclineDialog(context, order.id),
+          child: const Text(
+            'Decline',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+        );
+
+        return Column(
+          children: <Widget>[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AdminTheme.textDark,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFFE7E2D6),
+                  disabledForegroundColor: AdminTheme.mutedDark,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: checklistComplete
+                    ? () => _showConfirmationDialog(
+                          context,
+                          'Mark Order #${order.id} as Ready?',
+                          'Confirm that this order is ready to be served to '
+                              'Table #${order.tableNumber}?',
+                          () => widget.onActionTriggered(order.id, 'READY'),
+                        )
+                    : null,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    if (!checklistComplete) ...const <Widget>[
+                      Icon(Icons.lock_outline, size: 16),
+                      SizedBox(width: 6),
+                    ],
+                    const Text(
+                      'Mark as Ready',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (canDecline) ...<Widget>[
+              const SizedBox(height: 8),
+              SizedBox(width: double.infinity, child: declineButton),
+            ],
+          ],
         );
       }
       if (canDecline) {

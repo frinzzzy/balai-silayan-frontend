@@ -603,6 +603,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final String timeNow = '${TimeOfDay.now().format(context)} • Today';
     final int index = _orders.indexWhere((o) => o.id == orderId);
 
+    // Safety net: huwag nang subukang i-mark as Ready kung may hindi pa
+    // naka-check sa checklist. May inline hint na sa card kung ilan pa ang
+    // kulang — walang pop-up at walang error snackbar.
+    if (targetStatus == 'READY' &&
+        index != -1 &&
+        _orders[index].hasChecklist &&
+        !_orders[index].allItemsChecked) {
+      _loadDashboardData();
+      return;
+    }
+
     // I-save ang dating state para ma-revert kung tanggihan ng backend
     // (hal. hindi pa kompleto ang checklist o invalid status transition).
     final String? previousStatus = index == -1 ? null : _orders[index].status;
@@ -675,6 +686,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             if (!ok) {
               // Halimbawa: checklist not finished (409) or invalid transition.
               revertOptimisticUpdate();
+              final String error =
+                  (AdminService.lastOrderStatusError ?? '').toLowerCase();
+              final bool checklistBlocked = targetStatus == 'READY' &&
+                  (error.contains('checklist') ||
+                      error.contains('not finished') ||
+                      error.contains('hindi pa'));
+              if (checklistBlocked) {
+                // Inline hint na lang sa order card — huwag nang mag-snackbar.
+                _loadDashboardData();
+                return;
+              }
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
