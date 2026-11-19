@@ -422,14 +422,14 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         break;
       case 'SERVED':
         _statusBadgeLabel = 'Served';
-        _stepperProgressIndex = 2;
+        _stepperProgressIndex = 3;
         break;
       case 'COMPLETED':
       case 'PAID':
       case 'CLOSED':
       case 'SETTLED':
         _statusBadgeLabel = 'Paid';
-        _stepperProgressIndex = 3;
+        _stepperProgressIndex = 4;
         break;
       case 'REJECTED':
       case 'DECLINED':
@@ -1346,6 +1346,14 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       badgeBg = const Color(0xFFEAF0E9);
       badgeFg = const Color(0xFF203F35);
     } else if (_stepperProgressIndex == 2) {
+      stageTitle = 'Your food is ready!';
+      stageCopy = widget.isTakeout
+          ? 'Your order is ready for pickup at the counter.'
+          : 'Our staff is on the way to serve your food at $tableString.';
+      badgeIcon = Icons.restaurant_menu_outlined;
+      badgeBg = const Color(0xFFEAF0E9);
+      badgeFg = const Color(0xFF203F35);
+    } else if (_stepperProgressIndex == 3) {
       stageTitle = 'Your food is served!';
       stageCopy =
       'Enjoy your meal at $tableString. Need anything else? Call a waiter anytime.';
@@ -1515,9 +1523,15 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         'subtitle': 'Our chefs are actively cooking your fresh plates.',
       },
       {
-        'title': 'Served',
+        'title': 'Ready for service',
         'subtitle': widget.isTakeout
             ? 'Your order is ready for pickup at the counter.'
+            : 'Plated and waiting for our staff to bring it to your table.',
+      },
+      {
+        'title': 'Served',
+        'subtitle': widget.isTakeout
+            ? 'Your order has been handed over at the counter.'
             : 'Dispatched cleanly to your chosen table position.',
       },
       {
