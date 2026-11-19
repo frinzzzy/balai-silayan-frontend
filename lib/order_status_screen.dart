@@ -15,6 +15,7 @@ import 'services/order_event_bus.dart';
 import 'services/order_event_router.dart';
 import 'services/customer_navigation.dart';
 import 'config/api_config.dart';
+import 'order_type_selection_screen.dart';
 import 'utils/currency.dart';
 
 class OrderStatusScreen extends StatefulWidget {
@@ -568,6 +569,24 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       tableNumber: tableNum,
       isAdditionalOrder:
           widget.isAdditionalOrder || UserSession.isAdditionalOrder,
+    );
+  }
+
+  /// Bumalik sa Order Type Selection (New Order / Additional Order / Request
+  /// Bill) pagkatapos mag-order, imbes na dumiretso sa Menu.
+  void _navigateToOrderSelection() {
+    final int tableNum = widget.tableId ??
+        UserSession.activeTableId ??
+        UserSession.activeTableNumber ??
+        7;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => OrderTypeSelectionScreen(
+          tableId: tableNum,
+          tableNumber: tableNum,
+        ),
+      ),
+      (route) => route.settings.name == 'menu' || route.isFirst,
     );
   }
 
@@ -1294,9 +1313,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                 borderRadius: BorderRadius.circular(10),
               ),
             ),
-            onPressed: _navigateToMenu,
+            onPressed: _navigateToOrderSelection,
             child: const Text(
-              'Back to menu',
+              'Back to Order Selection',
               style: TextStyle(
                 color: Color(0xFF203F35),
                 fontWeight: FontWeight.bold,
@@ -1497,9 +1516,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
               ),
               elevation: 0,
             ),
-            onPressed: _navigateToMenu,
+            onPressed: _navigateToOrderSelection,
             child: const Text(
-              'Back to menu',
+              'Back to Order Selection',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
