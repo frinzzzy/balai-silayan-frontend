@@ -52,7 +52,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   bool _isLoadingLiveOrder = true;
   bool _hasActiveOrder = true;
   bool _sessionWasClosed = false;
-  bool _billRequested = false;
   bool _popScopeCanPop = true;
 
   /// `true` kapag hindi makuha ang latest status sa backend — ipinapakita ang
@@ -152,7 +151,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         _lastAppliedStatus = '';
         _lastStatusOrderKey = null;
         _currentOrderStatus = 'PENDING';
-        _billRequested = false;
       });
       _fetchLatestOrderFromBackend();
     }
@@ -322,18 +320,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
           _isLoadingLiveOrder = false;
           _showingLastKnown = false;
 
-          // I-restore ang bill-requested state mula sa server para tama pa rin
-          // ito pag nag-refresh o bumalik ang customer sa screen.
-          if (orderData.containsKey('bill_requested_at')) {
-            final bool hasBillRequest =
-                orderData['bill_requested_at'] != null;
-            final bool isTerminal =
-                _terminalBillStatuses.contains(serverStatus) ||
-                    _terminalBillStatuses.contains(effectiveStatus);
-            _billRequested =
-                hasBillRequest && !isTerminal && !_sessionWasClosed;
-          }
-
           _applyStatusValues(effectiveStatus);
         });
         return;
@@ -444,7 +430,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       case 'SETTLED':
         _statusBadgeLabel = 'Paid';
         _stepperProgressIndex = 3;
-        _billRequested = false; // Na-settle na ang bill/session — bumalik sa normal na state.
         break;
       case 'REJECTED':
       case 'DECLINED':
@@ -464,8 +449,8 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     }
   }
 
-  /// Lock ang customer UI sa "Bill Requested / Receipt Summary" state kapag
-  /// nakarating sa backend ang bill request para sa kasalukuyang session.
+  /// Kapag may bill request, huwag baguhin ang live monitoring view — refresh
+  /// lang ang data. Dati kasi pinapalitan ang UI ng "Bill is on the way" view.
   void _handleBillRequested(dynamic dataPayload) {
     if (!mounted) return;
     
@@ -495,17 +480,16 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
       }
     }
 
-    // Kung terminal na ang order o sarado na ang session, huwag nang i-lock
-    // ang UI sa "Bill Requested" — tapos na ang billing cycle.
+    // Huwag nang baguhin ang kasalukuyang view (live monitoring) kapag may
+    // bill request. I-refresh lang ang data para updated pa rin ang status.
+    // Dati kasi pinapalitan nito ang live monitoring ng "Bill is on the way"
+    // view, kaya nawawala ang live status tracker/button.
     if (_sessionWasClosed ||
         _terminalBillStatuses.contains(_currentOrderStatus.toUpperCase())) {
       return;
     }
 
-    setState(() {
-      _billRequested = true;
-      _showLiveTrackerView = false;
-    });
+    unawaited(_fetchLatestOrderFromBackend());
   }
 
   void _handleSessionClosed(dynamic eventPayloadData) {
@@ -547,7 +531,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     final dynamic targetId = widget.orderId ?? UserSession.lastPlacedOrderId ?? UserSession.targetParentOrderId;
     setState(() {
       _sessionWasClosed = true;
-      _billRequested = false;
       _showLiveTrackerView = false;
     });
     _showSessionFinishedDialog(_fetchedOrderCode.isNotEmpty ? _fetchedOrderCode : UserSession.formatOrderCode(targetId));
@@ -642,11 +625,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
                 ),
                 child: _showLiveTrackerView
                     ? _buildLiveStatusTrackerView(
-                  displayOrderCode,
-                  tableString,
-                )
-                    : _billRequested
-                    ? _buildBillRequestedView(
                   displayOrderCode,
                   tableString,
                 )
@@ -972,86 +950,6 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         _buildContextInfoBox(),
         const SizedBox(height: 28),
         _buildConfirmationActionButtons(),
-      ],
-    );
-  }
-
-  /// Bill Requested / Receipt Summary state — i-lock ang customer dito kapag
-  /// na-request na ang bill, imbes na bumalik sa live order tracking.
-  Widget _buildBillRequestedView(String orderCode, String tableString) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 12),
-        Container(
-          width: 76,
-          height: 76,
-          decoration: BoxDecoration(
-            color: const Color(0xFFEAF0E9),
-            shape: BoxShape.circle,
-            border: Border.all(color: const Color(0xFF53766C)),
-          ),
-          child: const Center(
-            child: Icon(Icons.receipt_long, size: 32, color: Color(0xFF203F35)),
-          ),
-        ),
-        const SizedBox(height: 20),
-        const Text(
-          'BILL REQUESTED',
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            color: Color(0xFFA47C3D),
-            letterSpacing: 1.2,
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Bill is on the way.',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF203F35),
-            height: 1.2,
-          ),
-        ),
-        const SizedBox(height: 10),
-        const Text(
-          'Salamat! Our staff has been notified to prepare your official receipt or collect payment.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13, color: Color(0xFF788078), height: 1.4),
-        ),
-        const SizedBox(height: 20),
-        _buildOrderSummaryCard(orderCode, tableString),
-        const SizedBox(height: 16),
-        _buildContextInfoBox(),
-        const SizedBox(height: 28),
-        SizedBox(
-          width: double.infinity,
-          height: 52,
-          child: ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF203F35),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              elevation: 0,
-            ),
-            onPressed: _navigateToMenu,
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'Back to menu',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                ),
-                SizedBox(width: 8),
-                Icon(Icons.arrow_forward, color: Colors.white, size: 18),
-              ],
-            ),
-          ),
-        ),
       ],
     );
   }
