@@ -297,11 +297,20 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () {
-              final val = tableController.text.trim();
-              if (val.isNotEmpty) {
+              final String val = tableController.text.trim();
+              final int? parsedTableId = int.tryParse(val);
+              if (parsedTableId == null || parsedTableId <= 0 || parsedTableId > 999) {
                 Navigator.pop(ctx);
-                _handleManualFallback(val);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter a valid table number (1-999).'),
+                    backgroundColor: Color(0xFF8E5136),
+                  ),
+                );
+                return;
               }
+              Navigator.pop(ctx);
+              _handleManualFallback(val);
             },
             child: const Text('Continue', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),

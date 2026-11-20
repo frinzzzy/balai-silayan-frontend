@@ -24,6 +24,7 @@ class FoodItem {
   final int categoryId;
   final bool isAvailable;
   final String? imageUrl;
+  final int? stockQuantity;
 
   static String getLocalMenuImage(String dishName) {
     final String clean = dishName.trim().toLowerCase();
@@ -130,6 +131,7 @@ class FoodItem {
     required this.price,
     required this.categoryId,
     this.isAvailable = true,
+    this.stockQuantity,
     String? imageUrl,
   }) : imageUrl = imageUrl ?? hardcodedImageUrls[itemDbId] ?? getLocalMenuImage(name);
 
@@ -145,6 +147,7 @@ class FoodItem {
       price: double.tryParse(json['price']?.toString() ?? '0.0') ?? 0.0,
       categoryId: json['category_id'] ?? 1,
       isAvailable: json['is_available'] ?? true,
+      stockQuantity: int.tryParse(json['stock_quantity']?.toString() ?? '') ?? null,
       imageUrl: (dbImg != null && dbImg.isNotEmpty && !dbImg.startsWith('http')) ? dbImg : fallbackImg,
     );
   }
@@ -200,6 +203,7 @@ class _MenuScreenState extends State<MenuScreen> {
       price: item.price,
       categoryId: item.categoryId,
       isAvailable: item.isAvailable,
+      stockQuantity: item.stockQuantity,
     );
   }
 
@@ -210,6 +214,7 @@ class _MenuScreenState extends State<MenuScreen> {
       price: item.price,
       categoryId: item.categoryId,
       isAvailable: item.isAvailable,
+      stockQuantity: item.stockQuantity,
     );
   }
 
@@ -967,6 +972,14 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   void _modifyQuantity(FoodItem item, int variance) {
+    // Stock guard: huwag magdagdag ng quantity na lumalampas sa on-hand stock.
+    if (variance > 0) {
+      final int activeQty = _orderCart[item] ?? 0;
+      final int maxQty = item.stockQuantity ?? 999999;
+      if (activeQty + variance > maxQty) {
+        return;
+      }
+    }
     setState(() {
       int activeQty = _orderCart[item] ?? 0;
       if (activeQty + variance <= 0) {

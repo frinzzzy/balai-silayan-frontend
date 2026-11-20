@@ -601,7 +601,13 @@ class _FoodDetailsScreenState extends State<FoodDetailsScreen> {
               ),
               const SizedBox(width: 14),
               InkWell(
-                onTap: () => setState(() => _quantity++),
+                onTap: () {
+                  // Stock guard: hindi pwedeng umabot sa sobrang quantity na
+                  // lumalampas sa on-hand stock ng item.
+                  final int maxQty = widget.foodItem.stockQuantity ?? 999999;
+                  final int nextQty = _quantity + 1 > maxQty ? maxQty : _quantity + 1;
+                  if (nextQty > 0) setState(() => _quantity = nextQty);
+                },
                 child: const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 6.0),
                   child: Icon(Icons.add, size: 16, color: Color(0xFF203F35)),

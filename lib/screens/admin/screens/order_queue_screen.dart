@@ -111,6 +111,7 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
               const SizedBox(height: 16),
               TextField(
                 controller: reasonController,
+                maxLength: 255,
                 maxLines: 2,
                 decoration: InputDecoration(
                   labelText: 'Decline Reason',

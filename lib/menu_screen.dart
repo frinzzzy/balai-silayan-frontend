@@ -31,6 +31,7 @@ class FoodItem {
   final int categoryId;
   final bool isAvailable;
   final String? imageUrl;
+  final int? stockQuantity;
 
   static String getLocalMenuImage(String dishName) {
     final String clean = dishName.trim().toLowerCase();
@@ -138,6 +139,7 @@ class FoodItem {
     required this.price,
     required this.categoryId,
     this.isAvailable = true,
+    this.stockQuantity,
     String? imageUrl,
   }) : imageUrl = imageUrl ?? hardcodedImageUrls[itemDbId] ?? getLocalMenuImage(name);
 
@@ -153,6 +155,7 @@ class FoodItem {
       price: double.tryParse(json['price']?.toString() ?? '0.0') ?? 0.0,
       categoryId: json['category_id'] ?? 1,
       isAvailable: json['is_available'] ?? true,
+      stockQuantity: int.tryParse(json['stock_quantity']?.toString() ?? '') ?? null,
       imageUrl: (dbImg != null && dbImg.isNotEmpty && !dbImg.startsWith('http')) ? dbImg : fallbackImg,
     );
   }
@@ -1065,7 +1068,33 @@ class _MenuScreenState extends State<MenuScreen> {
     }
     if (variance > 0 && !await _ensureCanAddItems()) return;
     if (!mounted) return;
+
+    // Stock guard: basta pa lang tayo ay magdadagdag ng quantity na lumalampas
+    // sa on-hand stock ng item, harangin muna bago mailipat sa cart.
+    if (variance > 0) {
+      final int currentQty = _orderCart[item] ?? 0;
+      final int maxQty = item.stockQuantity ?? 999999;
+      if (currentQty + variance > maxQty) {
+        _showStockLimitSnack(maxQty);
+        return;
+      }
+    }
+
     _modifyQuantity(item, variance);
+  }
+
+  void _showStockLimitSnack(int stockLimit) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Hindi kayang magdagdag ng higit sa stock. Hanggang sa stock limit lang (Stock: $stockLimit).',
+          ),
+          backgroundColor: const Color(0xFF8E5136),
+        ),
+      );
   }
 
   void _showUnavailableSnack() {
