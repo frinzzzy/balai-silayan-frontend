@@ -115,6 +115,13 @@ class AdminOrder {
   final bool isAdditional;
   final String notes;
 
+  /// `DINE_IN` (default) o `TAKEOUT` (Google online order).
+  final String fulfillmentType;
+  final int? customerId;
+  final String customerName;
+  final String? customerEmail;
+  final String? customerAvatarUrl;
+
   AdminOrder({
     required this.id,
     required this.tableNumber,
@@ -130,7 +137,18 @@ class AdminOrder {
     this.parentOrderId,
     this.isAdditional = false,
     this.notes = '',
+    this.fulfillmentType = 'DINE_IN',
+    this.customerId,
+    this.customerName = '',
+    this.customerEmail,
+    this.customerAvatarUrl,
   });
+
+  bool get isTakeout => fulfillmentType.toUpperCase() == 'TAKEOUT';
+
+  /// Maikling label para sa table/service type sa admin cards.
+  String get serviceLabel =>
+      isTakeout ? 'Takeout / Pickup' : 'Table ${tableNumber.toString().padLeft(2, '0')}';
 
   AdminOrder copyWith({
     String? status,
@@ -153,6 +171,11 @@ class AdminOrder {
       parentOrderId: parentOrderId,
       isAdditional: isAdditional,
       notes: notes,
+      fulfillmentType: fulfillmentType,
+      customerId: customerId,
+      customerName: customerName,
+      customerEmail: customerEmail,
+      customerAvatarUrl: customerAvatarUrl,
     );
   }
 
@@ -214,6 +237,14 @@ class AdminOrder {
     final String orderType = (json['order_type'] ?? '')
         .toString()
         .toUpperCase();
+    final String givenName =
+        (json['customer_given_name'] ?? '').toString().trim();
+    final String familyName =
+        (json['customer_family_name'] ?? '').toString().trim();
+    final String customerName = <String>[
+      if (givenName.isNotEmpty) givenName,
+      if (familyName.isNotEmpty) familyName,
+    ].join(' ').trim();
     return AdminOrder(
       id: json['id'] ?? json['order_id'] ?? 100,
       tableNumber: json['table_number'] ?? json['table_id'] ?? 1,
@@ -244,6 +275,18 @@ class AdminOrder {
           (parsedParentId != null && parsedParentId > 0) ||
           json['is_additional_order'] == true,
       notes: (json['notes'] ?? '').toString().trim(),
+      fulfillmentType: (json['fulfillment_type'] ?? 'DINE_IN')
+          .toString()
+          .toUpperCase(),
+      customerId: int.tryParse((json['customer_id'] ?? '').toString()),
+      customerName: customerName,
+      customerEmail: (json['customer_email'] ?? '').toString().trim().isEmpty
+          ? null
+          : json['customer_email'].toString(),
+      customerAvatarUrl:
+          (json['customer_avatar_url'] ?? '').toString().trim().isEmpty
+              ? null
+              : json['customer_avatar_url'].toString(),
     );
   }
 

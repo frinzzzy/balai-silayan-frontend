@@ -131,7 +131,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     setState(() => _isSubmitting = true);
 
-    final int targetTableId = widget.isTakeout ? 1 : (widget.tableId ?? UserSession.activeTableId ?? 7);
+    // Takeout: the Google sign-in already gave us the customer's own virtual
+    // table + session. Never fall back to a real dine-in table.
+    final int targetTableId = widget.isTakeout
+        ? (UserSession.activeTableId ?? widget.tableId ?? 1)
+        : (widget.tableId ?? UserSession.activeTableId ?? 7);
 
     final List<Map<String, dynamic>> orderItemsPayload = _editableCart.entries.map((entry) {
       final item = entry.key;
@@ -531,10 +535,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           'Session ended',
           style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
         ),
-        content: const Text(
-          'Na-settle na ang table session na ito. I-scan muli ang QR ng table '
-          'para magsimula ng bagong session.',
-          style: TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+        content: Text(
+          widget.isTakeout
+              ? 'Tapos na ang takeout session na ito. Bumalik sa home at mag-sign '
+                  'in muli para sa bagong online order.'
+              : 'Na-settle na ang table session na ito. I-scan muli ang QR ng table '
+                  'para magsimula ng bagong session.',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
         ),
         actions: [
           ElevatedButton(
@@ -545,7 +552,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               UserSession.clearAllBillRequests();
               UserSession.targetParentOrderId = null;
               UserSession.lastPlacedOrderId = null;
-              Navigator.of(context).popUntil((route) => route.isFirst);
+              if (widget.isTakeout) {
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              } else {
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              }
             },
             child: const Text(
               'OK',

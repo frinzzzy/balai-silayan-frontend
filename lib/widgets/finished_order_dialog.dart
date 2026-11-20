@@ -58,6 +58,7 @@ class FinishedOrderDialog {
       // order sa session), session-finished ang ipakita — hindi "Back to Menu".
       final bool sessionFinished = !isDeclined &&
           (forceSessionFinished || await _isSessionFinished(orderId));
+      final bool isTakeout = UserSession.isTakeout;
 
       if (!rootContext.mounted) return false;
 
@@ -116,8 +117,11 @@ class FinishedOrderDialog {
                 )
               : Text(
                   sessionFinished
-                      ? 'This table session is finished. Salamat sa paghain! '
-                          'I-scan muli ang QR code ng table para magsimula ng bagong session.'
+                      ? (isTakeout
+                          ? 'Tapos na ang takeout order mo. Salamat sa pag-order! '
+                              'Bumalik sa home para mag-sign in muli kung gusto ng bagong order.'
+                          : 'This table session is finished. Salamat sa paghain! '
+                              'I-scan muli ang QR code ng table para magsimula ng bagong session.')
                       : message ??
                           'Na-settle na ang ticket $orderCode. Kailangan mo nang bumalik sa order choices para magpatuloy.',
                   style: const TextStyle(
@@ -136,7 +140,9 @@ class FinishedOrderDialog {
               ),
               onPressed: () => Navigator.pop(ctx, true),
               child: Text(
-                sessionFinished ? 'Scan QR Again' : 'Back to Menu',
+                sessionFinished
+                    ? (isTakeout ? 'Back to Home' : 'Scan QR Again')
+                    : 'Back to Menu',
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
@@ -146,7 +152,7 @@ class FinishedOrderDialog {
 
       if (goBack == true) {
         if (sessionFinished) {
-          _returnToQrScan();
+          _returnToQrScan(isTakeout: isTakeout);
         } else {
           _returnToOrderChoices(
             orderCode: orderCode,
@@ -212,8 +218,8 @@ class FinishedOrderDialog {
   }
 
   /// Session finished: i-clear ang lumang session at dalhin ang customer sa
-  /// QR scanner para makapagsimula ng bagong table session.
-  static void _returnToQrScan() {
+  /// QR scanner (dine-in) o sa Welcome/Home (takeout).
+  static void _returnToQrScan({required bool isTakeout}) {
     UserSession.clearSession();
     UserSession.clearAllBillRequests();
     UserSession.isAdditionalOrder = false;
@@ -227,7 +233,13 @@ class FinishedOrderDialog {
         NotificationCenter.navigatorKey.currentContext;
     if (rootContext == null) return;
 
-    Navigator.of(rootContext).pushAndRemoveUntil(
+    final NavigatorState navigator = Navigator.of(rootContext);
+    if (isTakeout) {
+      navigator.popUntil((route) => route.isFirst);
+      return;
+    }
+
+    navigator.pushAndRemoveUntil(
       MaterialPageRoute<void>(
         builder: (_) => const QrScannerScreen(),
       ),

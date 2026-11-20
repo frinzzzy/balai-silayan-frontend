@@ -36,6 +36,7 @@ class CustomerBottomNav extends StatelessWidget {
     required this.onCart,
     required this.onLiveStatus,
     required this.onBill,
+    this.showBill = true,
   });
 
   final CustomerNavTab activeTab;
@@ -43,6 +44,9 @@ class CustomerBottomNav extends StatelessWidget {
   final VoidCallback onCart;
   final VoidCallback onLiveStatus;
   final VoidCallback onBill;
+
+  /// `false` para sa online takeout — walang table bill para sa pickup orders.
+  final bool showBill;
 
   @override
   Widget build(BuildContext context) {
@@ -73,12 +77,13 @@ class CustomerBottomNav extends StatelessWidget {
             isActive: activeTab == CustomerNavTab.liveStatus,
             onTap: onLiveStatus,
           ),
-          _buildNavItem(
-            Icons.account_balance_wallet_outlined,
-            'Bill',
-            isActive: activeTab == CustomerNavTab.bill,
-            onTap: onBill,
-          ),
+          if (showBill)
+            _buildNavItem(
+              Icons.account_balance_wallet_outlined,
+              'Bill',
+              isActive: activeTab == CustomerNavTab.bill,
+              onTap: onBill,
+            ),
         ],
       ),
     );

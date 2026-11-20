@@ -481,8 +481,8 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                'Order #BS-${order.id} • Table '
-                                '${order.tableNumber.toString().padLeft(2, '0')}',
+                                'Order #BS-${order.id} • '
+                                '${order.isTakeout ? 'Takeout${order.customerName.isNotEmpty ? ' — ${order.customerName}' : ''}' : 'Table ${order.tableNumber.toString().padLeft(2, '0')}'}',
                                 style: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -1070,9 +1070,32 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '#BS-${order.id}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AdminTheme.textDark),
+              Row(
+                children: [
+                  Text(
+                    '#BS-${order.id}',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AdminTheme.textDark),
+                  ),
+                  if (order.isTakeout) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF203F35),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'TAKEOUT',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.6,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
               StatusChip(status: order.status),
             ],
@@ -1189,7 +1212,9 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
           ],
           const SizedBox(height: 4),
           Text(
-            'Table ${order.tableNumber.toString().padLeft(2, '0')} • Dine-in',
+            order.isTakeout
+                ? '${order.serviceLabel}${order.customerName.isNotEmpty ? ' • ${order.customerName}' : ''}'
+                : '${order.serviceLabel} • Dine-in',
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AdminTheme.textDark),
           ),
           const SizedBox(height: 8),
@@ -1323,7 +1348,9 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                 onPressed: () => _showConfirmationDialog(
                   context,
                   'Accept Order #${order.id}?',
-                  'Are you sure you want to accept and start preparing this order for Table #${order.tableNumber}?',
+                  order.isTakeout
+                      ? 'Are you sure you want to accept and start preparing this takeout order${order.customerName.isNotEmpty ? ' for ${order.customerName}' : ''}?'
+                      : 'Are you sure you want to accept and start preparing this order for Table #${order.tableNumber}?',
                   () => widget.onActionTriggered(order.id, 'PREPARING'),
                 ),
                 child: const Text('Review & accept', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
@@ -1371,9 +1398,13 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                 onPressed: checklistComplete
                     ? () => _showConfirmationDialog(
                           context,
-                          'Mark Order #${order.id} as Ready?',
-                          'Confirm that this order is ready to be served to '
-                              'Table #${order.tableNumber}?',
+                          order.isTakeout
+                              ? 'Mark Order #${order.id} as Ready for Pickup?'
+                              : 'Mark Order #${order.id} as Ready?',
+                          order.isTakeout
+                              ? 'Confirm that this takeout order${order.customerName.isNotEmpty ? ' for ${order.customerName}' : ''} is ready for pickup.'
+                              : 'Confirm that this order is ready to be served to '
+                                  'Table #${order.tableNumber}?',
                           () => widget.onActionTriggered(order.id, 'READY'),
                         )
                     : null,
@@ -1384,9 +1415,9 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
                       Icon(Icons.lock_outline, size: 16),
                       SizedBox(width: 6),
                     ],
-                    const Text(
-                      'Mark as Ready',
-                      style: TextStyle(
+                    Text(
+                      order.isTakeout ? 'Ready for Pickup' : 'Mark as Ready',
+                      style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
@@ -1435,11 +1466,18 @@ class _OrderQueueScreenState extends State<OrderQueueScreen> {
             ),
             onPressed: () => _showConfirmationDialog(
               context,
-              'Mark Order #${order.id} as Served?',
-              'Confirm that this order has been served to Table #${order.tableNumber}?',
+              order.isTakeout
+                  ? 'Mark Order #${order.id} as Picked Up?'
+                  : 'Mark Order #${order.id} as Served?',
+              order.isTakeout
+                  ? 'Confirm that this takeout order${order.customerName.isNotEmpty ? ' for ${order.customerName}' : ''} has been picked up.'
+                  : 'Confirm that this order has been served to Table #${order.tableNumber}?',
               () => widget.onActionTriggered(order.id, 'SERVED'),
             ),
-            child: const Text('Mark as Served', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+            child: Text(
+              order.isTakeout ? 'Mark as Picked Up' : 'Mark as Served',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+            ),
           ),
         );
       }

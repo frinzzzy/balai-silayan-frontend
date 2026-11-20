@@ -578,8 +578,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
   }
 
   /// Session settled/closed: linisin ang lumang session at dalhin sa QR
-  /// scanner para makapagsimula ng bagong table session.
+  /// scanner (dine-in) o sa Home (takeout).
   void _navigateToQrScan() {
+    final bool takeout = widget.isTakeout || UserSession.isTakeout;
     UserSession.clearSession();
     UserSession.clearAllBillRequests();
     UserSession.isAdditionalOrder = false;
@@ -588,6 +589,10 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     UserSession.firstOrderId = null;
     UserSession.autoAdditionalParentId = null;
     OrderContext.instance.reset();
+    if (takeout) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      return;
+    }
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(
         builder: (_) => const QrScannerScreen(),
@@ -701,6 +706,7 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
             ),
           );
         },
+        showBill: !widget.isTakeout,
       ),
       ),
     );

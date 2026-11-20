@@ -8,6 +8,7 @@ import 'shopping_cart_screen.dart';
 import 'food_details_screen.dart';
 import 'order_type_selection_screen.dart';
 import 'session_bill_screen.dart';
+import 'welcome_screen.dart';
 import 'user_session.dart';
 import '../widgets/customer_bottom_nav.dart';
 import '../widgets/finished_order_dialog.dart';
@@ -201,6 +202,10 @@ class MenuScreen extends StatefulWidget {
   final int? tableNumber;
   final bool isAdditionalOrder;
 
+  /// `true` kapag galing sa "Order Online / Takeout" (Google Sign-In) door.
+  /// Takeout ang fulfillment at naka-hide ang Bill tab.
+  final bool isTakeout;
+
   /// Kapag `true`, sadyang nagsimula ng brand-new order ang customer (mula sa
   /// Order Type Selection). Nililinis nito ang dating additional-order flags.
   ///
@@ -214,6 +219,7 @@ class MenuScreen extends StatefulWidget {
     this.tableId,
     this.tableNumber,
     this.isAdditionalOrder = false,
+    this.isTakeout = false,
     this.resetOrderContext = false,
   });
 
@@ -292,6 +298,13 @@ class _MenuScreenState extends State<MenuScreen> {
     GlobalSocketListener.instance.resetTableIdentity();
     AudioNotificationService.resetOrderNotificationDedupe();
     _polledOrderStatuses.clear();
+
+    // Takeout (Google online) context: server-assigned virtual table + session.
+    _isTakeoutSelected = widget.isTakeout || UserSession.isTakeout;
+    if (_isTakeoutSelected) {
+      UserSession.isTakeout = true;
+    }
+
     if (widget.tableNumber != null) {
       _chosenTableNumber = widget.tableNumber;
       UserSession.activeTableNumber = widget.tableNumber;
@@ -342,7 +355,9 @@ class _MenuScreenState extends State<MenuScreen> {
     _fetchDatabaseCategories();
     _fetchLiveDatabaseMenu();
     _syncExistingOrdersForTable();
-    _fetchBillLockState();
+    if (!_isTakeoutSelected) {
+      _fetchBillLockState();
+    }
     _startHeartbeatTimer();
     _startStatusPollTimer();
     GlobalSocketListener.instance.start(context: context);
@@ -1098,7 +1113,9 @@ class _MenuScreenState extends State<MenuScreen> {
         content: Text(
           hasCart
               ? 'May laman pa ang cart mo. Mananatili ito hanggang makabalik ka sa menu.'
-              : 'Babalik ka sa order options.',
+              : (_isTakeoutSelected
+                  ? 'Babalik ka sa home. Kailangan mong mag-sign in muli para sa takeout.'
+                  : 'Babalik ka sa order options.'),
           style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
         ),
         actions: [
@@ -1119,6 +1136,16 @@ class _MenuScreenState extends State<MenuScreen> {
     );
 
     if (leave != true || !mounted) return;
+
+    if (_isTakeoutSelected) {
+      final NavigatorState nav = Navigator.of(context);
+      UserSession.clearSession();
+      nav.pushAndRemoveUntil(
+        MaterialPageRoute<void>(builder: (_) => const WelcomeScreen()),
+        (route) => route.isFirst,
+      );
+      return;
+    }
 
     final NavigatorState nav = Navigator.of(context);
     if (nav.canPop()) {
@@ -1311,6 +1338,7 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   Widget _buildTableContextStrip() {
+    final bool takeout = _isTakeoutSelected;
     return InkWell(
       onTap: () {},
       child: Container(
@@ -1321,15 +1349,28 @@ class _MenuScreenState extends State<MenuScreen> {
           children: [
             Row(
               children: [
-                const Icon(Icons.check_circle_outline, size: 14, color: Color(0xFF53766C)),
+                Icon(
+                  takeout
+                      ? Icons.shopping_bag_outlined
+                      : Icons.check_circle_outline,
+                  size: 14,
+                  color: const Color(0xFF53766C),
+                ),
                 const SizedBox(width: 6),
                 Text(
-                  _chosenTableNumber != null ? 'Table ${_chosenTableNumber.toString().padLeft(2, '0')} • verified' : 'Table 07 • verified',
+                  takeout
+                      ? 'Takeout / Pickup • online order'
+                      : (_chosenTableNumber != null
+                          ? 'Table ${_chosenTableNumber.toString().padLeft(2, '0')} • verified'
+                          : 'Table 07 • verified'),
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: Color(0xFF203F35)),
                 ),
               ],
             ),
-            const Text('Dine-in', style: TextStyle(fontSize: 10, color: Color(0xFF788078), fontWeight: FontWeight.w500)),
+            Text(
+              takeout ? 'Takeout' : 'Dine-in',
+              style: const TextStyle(fontSize: 10, color: Color(0xFF788078), fontWeight: FontWeight.w500),
+            ),
           ],
         ),
       ),
@@ -1608,6 +1649,7 @@ class _MenuScreenState extends State<MenuScreen> {
             await Navigator.push(context, MaterialPageRoute(builder: (context) => SessionBillScreen(tableId: _chosenTableNumber, isTakeout: _isTakeoutSelected)));
             if (mounted) _fetchBillLockState();
           },
+          showBill: !_isTakeoutSelected,
         ),
       ],
     );

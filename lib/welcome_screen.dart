@@ -1,16 +1,89 @@
 import 'package:flutter/material.dart';
 
+import 'menu_screen.dart';
 import 'qr_scanner_screen.dart';
+import 'services/google_auth_service.dart';
 import 'theme/app_theme.dart';
 
-/// Landing / welcome screen bago mag-QR scan.
-/// Brand hero + "Start Ordering" CTA + ordering policy.
-class WelcomeScreen extends StatelessWidget {
+/// Landing / welcome screen bago pumili ng order channel.
+///
+/// Dalawang door, isang menu/pipeline:
+/// - **Dine-in** — scan the table QR (no login).
+/// - **Order Online / Takeout** — sign in with Google; the backend gives the
+///   account its own isolated virtual table + session.
+class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
 
-  void _openScanner(BuildContext context) {
+  @override
+  State<WelcomeScreen> createState() => _WelcomeScreenState();
+}
+
+class _WelcomeScreenState extends State<WelcomeScreen> {
+  bool _isSigningIn = false;
+
+  void _openScanner() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const QrScannerScreen()),
+    );
+  }
+
+  Future<void> _signInForTakeout() async {
+    if (_isSigningIn) return;
+    setState(() => _isSigningIn = true);
+
+    try {
+      final GoogleAuthResult result = await GoogleAuthService.signInWithGoogle();
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Welcome, ${result.displayName}! Takeout session ready.'),
+          backgroundColor: const Color(0xFF203F35),
+        ),
+      );
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => const MenuScreen(isTakeout: true),
+          settings: const RouteSettings(name: 'menu'),
+        ),
+      );
+    } on GoogleAuthException catch (error) {
+      if (!mounted) return;
+      _showSignInError(error.message);
+    } catch (_) {
+      if (!mounted) return;
+      _showSignInError('Hindi natuloy ang Google Sign-In. Subukan muli.');
+    } finally {
+      if (mounted) setState(() => _isSigningIn = false);
+    }
+  }
+
+  void _showSignInError(String message) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Sign-in failed',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
+        ),
+        content: Text(
+          message,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF203F35), height: 1.4),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              'OK',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -51,7 +124,9 @@ class WelcomeScreen extends StatelessWidget {
                               Expanded(
                                 flex: 5,
                                 child: _StartPanel(
-                                  onStart: () => _openScanner(context),
+                                  onStart: _openScanner,
+                                  onOnline: _signInForTakeout,
+                                  isSigningIn: _isSigningIn,
                                 ),
                               ),
                             ],
@@ -62,7 +137,9 @@ class WelcomeScreen extends StatelessWidget {
                               const _BrandHero(compact: true),
                               const SizedBox(height: 30),
                               _StartPanel(
-                                onStart: () => _openScanner(context),
+                                onStart: _openScanner,
+                                onOnline: _signInForTakeout,
+                                isSigningIn: _isSigningIn,
                               ),
                             ],
                           ),
@@ -295,7 +372,14 @@ class _StepTile extends StatelessWidget {
 
 class _StartPanel extends StatelessWidget {
   final VoidCallback onStart;
-  const _StartPanel({required this.onStart});
+  final VoidCallback onOnline;
+  final bool isSigningIn;
+
+  const _StartPanel({
+    required this.onStart,
+    required this.onOnline,
+    required this.isSigningIn,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -387,6 +471,69 @@ class _StartPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 22),
+          Row(
+            children: [
+              const Expanded(child: Divider(height: 1, color: AppTheme.borderWarm)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  'OR ORDER ONLINE',
+                  style: TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                    color: AppTheme.mutedGray.withValues(alpha: 0.85),
+                  ),
+                ),
+              ),
+              const Expanded(child: Divider(height: 1, color: AppTheme.borderWarm)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 54,
+            child: OutlinedButton.icon(
+              onPressed: isSigningIn ? null : onOnline,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.darkCharcoal,
+                backgroundColor: Colors.white,
+                disabledForegroundColor: AppTheme.mutedGray,
+                side: const BorderSide(color: AppTheme.borderWarm),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              icon: isSigningIn
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppTheme.primaryCrimson,
+                      ),
+                    )
+                  : const Icon(Icons.login_rounded, size: 20),
+              label: Text(
+                isSigningIn
+                    ? 'Signing in…'
+                    : 'Order Online — Sign in with Google',
+                style: const TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Center(
+            child: Text(
+              'Takeout / pickup • Google account ang gamit para ma-track ang order.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11, color: AppTheme.mutedGray),
+            ),
+          ),
+          const SizedBox(height: 22),
           const Divider(height: 1, color: AppTheme.borderWarm),
           const SizedBox(height: 18),
           const Text(
@@ -401,7 +548,7 @@ class _StartPanel extends StatelessWidget {
           const SizedBox(height: 12),
           const _PolicyItem(
             icon: Icons.storefront_rounded,
-            text: 'Dine-in orders lamang — isang session kada mesa.',
+            text: 'Dine-in sa table QR; takeout gamit ang Google Sign-In — parehong menu at kitchen.',
           ),
           const _PolicyItem(
             icon: Icons.lock_outline_rounded,

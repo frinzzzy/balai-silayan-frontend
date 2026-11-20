@@ -21,4 +21,14 @@ class ApiConfig {
   /// credentials (hal. mula sa Supabase dashboard > Settings > API).
   static const String supabaseUrl = 'https://drhhhgkvlkbcwdbrajlb.supabase.co';
   static const String supabaseAnonKey = 'sb_publishable_EQUVCPZuJeyShOMVtvPVKw_FNqYqSrD';
+
+  /// Google OAuth **Web client ID** — kailangan ito ng `google_sign_in` para
+  /// makakuha ng `idToken` sa Android/iOS. Pwede itong i-set sa build:
+  /// `flutter run --dart-define=GOOGLE_WEB_CLIENT_ID=xxxx.apps.googleusercontent.com`
+  ///
+  /// Kung nasa web browser ang demo, ito rin ang client ID na gagamitin.
+  static const String googleWebClientId = String.fromEnvironment(
+    'GOOGLE_WEB_CLIENT_ID',
+    defaultValue: '',
+  );
 }

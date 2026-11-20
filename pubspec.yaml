@@ -2,7 +2,7 @@ name: balai_silayan
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.0.6+6
+version: 1.0.7+7
 
 environment:
   sdk: ^3.13.4
@@ -31,6 +31,7 @@ dependencies:
   gal: ^2.3.3
   share_plus: ^13.3.1
   path_provider: ^2.1.6
+  google_sign_in: ^7.2.0
 
 dev_dependencies:
   flutter_test:

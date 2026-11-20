@@ -161,8 +161,10 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
           'Session Finished',
           style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
         ),
-        content: const Text(
-          'Tapos na ang table session na ito. I-scan muli ang table QR code para magsimula ng bagong session. Salamat sa paghain sa Balai Silayan!',
+        content: Text(
+          widget.isTakeout
+              ? 'Tapos na ang takeout session na ito. Bumalik sa home at mag-sign in muli para sa bagong online order. Salamat sa pag-order sa Balai Silayan!'
+              : 'Tapos na ang table session na ito. I-scan muli ang table QR code para magsimula ng bagong session. Salamat sa paghain sa Balai Silayan!',
         ),
         actions: [
           ElevatedButton(
@@ -171,9 +173,9 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
               Navigator.pop(ctx);
               _goToQrScan();
             },
-            child: const Text(
-              'Scan QR Again',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            child: Text(
+              widget.isTakeout ? 'Back to Home' : 'Scan QR Again',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
           ),
         ],
@@ -199,8 +201,9 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
   }
 
   /// Kapag tapos na ang buong table session, i-clear ang lumang state at
-  /// dalhin ang customer sa QR scanner para sa bagong session.
+  /// dalhin ang customer sa QR scanner (dine-in) o sa Home (takeout).
   void _goToQrScan() {
+    final bool takeout = widget.isTakeout || UserSession.isTakeout;
     UserSession.clearSession();
     UserSession.clearAllBillRequests();
     UserSession.isAdditionalOrder = false;
@@ -209,6 +212,10 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
     UserSession.firstOrderId = null;
     UserSession.autoAdditionalParentId = null;
     OrderContext.instance.reset();
+    if (takeout) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      return;
+    }
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(
         builder: (_) => const QrScannerScreen(),
@@ -655,6 +662,7 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
         );
       },
       onBill: () {},
+      showBill: !widget.isTakeout,
     );
   }
 }
