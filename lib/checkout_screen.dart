@@ -213,7 +213,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       "is_additional_order": safeIsAdditional,
       "items": orderItemsPayload,
       "grand_total": _calculatedTotal,
-      "notes": _orderNotes.isEmpty ? null : _orderNotes,
+      "notes": _orderNotes.trim().isEmpty ? null : _orderNotes.trim().substring(0, 300),
       "client_order_id": idempotencyKey,
       "timestamp": DateTime.now().toIso8601String(),
     };
@@ -430,7 +430,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       // older ticket), i-reset lang ang additional flags.
       if (isSessionGone) {
         UserSession.clearSession();
-      } else {
+      } else if (isParentGone) {
         UserSession.isAdditionalOrder = false;
         UserSession.targetParentOrderId = null;
         UserSession.firstOrderId = null;
