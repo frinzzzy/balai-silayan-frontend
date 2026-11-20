@@ -27,8 +27,9 @@ class ApiConfig {
   /// `flutter run --dart-define=GOOGLE_WEB_CLIENT_ID=xxxx.apps.googleusercontent.com`
   ///
   /// Kung nasa web browser ang demo, ito rin ang client ID na gagamitin.
+  /// (I-set sa default ang aktwal na web client ID ng project.)
   static const String googleWebClientId = String.fromEnvironment(
     'GOOGLE_WEB_CLIENT_ID',
-    defaultValue: '',
+    defaultValue: '773489086910-7n13g54m3t2hrqfejui2apaped65nauo.apps.googleusercontent.com',
   );
 }
