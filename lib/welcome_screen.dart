@@ -1,16 +1,17 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
-import 'menu_screen.dart';
 import 'qr_scanner_screen.dart';
 import 'services/google_auth_service.dart';
+import 'services/google_web_button.dart';
 import 'theme/app_theme.dart';
 
-/// Landing / welcome screen bago pumili ng order channel.
+/// Landing / welcome screen.
 ///
-/// Dalawang door, isang menu/pipeline:
-/// - **Dine-in** — scan the table QR (no login).
-/// - **Order Online / Takeout** — sign in with Google; the backend gives the
-///   account its own isolated virtual table + session.
+/// Isang door lang: Google Sign-In muna bago ang table QR scan. Ang Dine In /
+/// Take Out choice ay nasa checkout na, hindi na dito.
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
 
@@ -20,34 +21,65 @@ class WelcomeScreen extends StatefulWidget {
 
 class _WelcomeScreenState extends State<WelcomeScreen> {
   bool _isSigningIn = false;
+  StreamSubscription<GoogleCustomerIdentity>? _webSignInSubscription;
 
-  void _openScanner() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const QrScannerScreen()),
+  @override
+  void initState() {
+    super.initState();
+    // Sa web, ang Google-rendered na button ang may hawak ng sign-in; dito
+    // natin pinakikinggan ang successful sign-in events.
+    if (kIsWeb) _listenForWebSignIn();
+  }
+
+  @override
+  void dispose() {
+    _webSignInSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _listenForWebSignIn() async {
+    _webSignInSubscription = GoogleAuthService.webIdentityResults().listen(
+      (GoogleCustomerIdentity identity) {
+        if (!mounted) return;
+        _openScanner(identity.displayName);
+      },
+      onError: (Object error) {
+        if (!mounted) return;
+        _showSignInError(
+          error is GoogleAuthException
+              ? error.message
+              : 'Hindi natuloy ang Google Sign-In. Subukan muli.',
+        );
+      },
     );
   }
 
-  Future<void> _signInForTakeout() async {
+  void _openScanner(String displayName) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Welcome, $displayName! I-scan ang QR ng inyong mesa.'),
+        backgroundColor: const Color(0xFF203F35),
+      ),
+    );
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => const QrScannerScreen(),
+        settings: const RouteSettings(name: 'qr_scanner'),
+      ),
+    );
+  }
+
+  Future<void> _signInAndContinue() async {
     if (_isSigningIn) return;
     setState(() => _isSigningIn = true);
 
     try {
-      final GoogleAuthResult result = await GoogleAuthService.signInWithGoogle();
+      final GoogleCustomerIdentity identity =
+          await GoogleAuthService.signInCustomerIdentity();
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Welcome, ${result.displayName}! Takeout session ready.'),
-          backgroundColor: const Color(0xFF203F35),
-        ),
-      );
-
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => const MenuScreen(isTakeout: true),
-          settings: const RouteSettings(name: 'menu'),
-        ),
-      );
+      _openScanner(identity.displayName);
     } on GoogleAuthException catch (error) {
       if (!mounted) return;
       _showSignInError(error.message);
@@ -124,8 +156,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                               Expanded(
                                 flex: 5,
                                 child: _StartPanel(
-                                  onStart: _openScanner,
-                                  onOnline: _signInForTakeout,
+                                  onSignIn: _signInAndContinue,
                                   isSigningIn: _isSigningIn,
                                 ),
                               ),
@@ -137,8 +168,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                               const _BrandHero(compact: true),
                               const SizedBox(height: 30),
                               _StartPanel(
-                                onStart: _openScanner,
-                                onOnline: _signInForTakeout,
+                                onSignIn: _signInAndContinue,
                                 isSigningIn: _isSigningIn,
                               ),
                             ],
@@ -371,13 +401,11 @@ class _StepTile extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 
 class _StartPanel extends StatelessWidget {
-  final VoidCallback onStart;
-  final VoidCallback onOnline;
+  final VoidCallback onSignIn;
   final bool isSigningIn;
 
   const _StartPanel({
-    required this.onStart,
-    required this.onOnline,
+    required this.onSignIn,
     required this.isSigningIn,
   });
 
@@ -410,7 +438,7 @@ class _StartPanel extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Icon(
-                  Icons.table_restaurant_rounded,
+                  Icons.login_rounded,
                   size: 20,
                   color: AppTheme.primaryCrimson,
                 ),
@@ -418,7 +446,7 @@ class _StartPanel extends StatelessWidget {
               const SizedBox(width: 12),
               const Expanded(
                 child: Text(
-                  'Ready to order?',
+                  'Sign in to start',
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -431,8 +459,8 @@ class _StartPanel extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           const Text(
-            'I-scan ang QR code na nakapaskil sa mesa para magsimula. '
-            'Kung wala kang makitang QR, magtanong lang sa aming staff.',
+            'Mag-sign in muna gamit ang Google account bago i-scan ang QR code '
+            'ng mesa. Dito rin mapipili ang Dine In o Take Out sa checkout.',
             style: TextStyle(
               fontSize: 13.5,
               height: 1.5,
@@ -440,95 +468,46 @@ class _StartPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 22),
-          SizedBox(
-            height: 54,
-            child: FilledButton.icon(
-              onPressed: onStart,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTheme.primaryCrimson,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+          if (kIsWeb)
+            SizedBox(height: 54, child: buildGoogleWebSignInButton())
+          else
+            SizedBox(
+              height: 54,
+              child: OutlinedButton.icon(
+                onPressed: isSigningIn ? null : onSignIn,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.darkCharcoal,
+                  backgroundColor: Colors.white,
+                  disabledForegroundColor: AppTheme.mutedGray,
+                  side: const BorderSide(color: AppTheme.borderWarm),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                 ),
-                elevation: 0,
-              ),
-              icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
-              label: const Text(
-                'Start Ordering',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.3,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Center(
-            child: Text(
-              'Kailangan ng camera permission para sa QR scan.',
-              style: TextStyle(fontSize: 11, color: AppTheme.mutedGray),
-            ),
-          ),
-          const SizedBox(height: 22),
-          Row(
-            children: [
-              const Expanded(child: Divider(height: 1, color: AppTheme.borderWarm)),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  'OR ORDER ONLINE',
-                  style: TextStyle(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.2,
-                    color: AppTheme.mutedGray.withValues(alpha: 0.85),
+                icon: isSigningIn
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppTheme.primaryCrimson,
+                        ),
+                      )
+                    : const _GoogleGlyph(),
+                label: Text(
+                  isSigningIn ? 'Signing in…' : 'Continue with Google',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
                   ),
                 ),
               ),
-              const Expanded(child: Divider(height: 1, color: AppTheme.borderWarm)),
-            ],
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 54,
-            child: OutlinedButton.icon(
-              onPressed: isSigningIn ? null : onOnline,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppTheme.darkCharcoal,
-                backgroundColor: Colors.white,
-                disabledForegroundColor: AppTheme.mutedGray,
-                side: const BorderSide(color: AppTheme.borderWarm),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              icon: isSigningIn
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppTheme.primaryCrimson,
-                      ),
-                    )
-                  : const Icon(Icons.login_rounded, size: 20),
-              label: Text(
-                isSigningIn
-                    ? 'Signing in…'
-                    : 'Order Online — Sign in with Google',
-                style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.2,
-                ),
-              ),
             ),
-          ),
           const SizedBox(height: 10),
           const Center(
             child: Text(
-              'Takeout / pickup • Google account ang gamit para ma-track ang order.',
+              'Kakapag-scan ka lang ng table QR pagkatapos mag-sign in.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 11, color: AppTheme.mutedGray),
             ),
@@ -548,7 +527,7 @@ class _StartPanel extends StatelessWidget {
           const SizedBox(height: 12),
           const _PolicyItem(
             icon: Icons.storefront_rounded,
-            text: 'Dine-in sa table QR; takeout gamit ang Google Sign-In — parehong menu at kitchen.',
+            text: 'I-scan ang QR sa mesa; piliin ang Dine In o Take Out sa checkout.',
           ),
           const _PolicyItem(
             icon: Icons.lock_outline_rounded,
@@ -600,6 +579,47 @@ class _PolicyItem extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Simpleng Google "G" mark para sa takeout button sa Android/iOS.
+/// Sa web, ang tunay na Google-rendered na button ang ginagamit.
+class _GoogleGlyph extends StatelessWidget {
+  const _GoogleGlyph();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 24,
+      height: 24,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: ShaderMask(
+        blendMode: BlendMode.srcIn,
+        shaderCallback: (Rect bounds) => const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            Color(0xFF4285F4),
+            Color(0xFFEA4335),
+            Color(0xFFFBBC05),
+            Color(0xFF34A853),
+          ],
+        ).createShader(bounds),
+        child: const Text(
+          'G',
+          style: TextStyle(
+            fontSize: 16,
+            height: 1,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
       ),
     );
   }

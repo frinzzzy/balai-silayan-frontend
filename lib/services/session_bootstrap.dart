@@ -48,6 +48,14 @@ class SessionBootstrap {
         return;
       }
 
+      // Google identity lang ang naka-save (logged in pero hindi pa na-scan):
+      // huwag buksan ang Menu. Mananatili ang Welcome at makakapag-scan pa rin
+      // nang hindi na kailangang mag-login ulit.
+      if (UserSession.activeTableId == null || !UserSession.hasActiveSession) {
+        _hasRestoredSession = false;
+        return;
+      }
+
       // Dine-in (QR) sessions can resume too. I-verify muna sa backend kung
       // bukas pa ang table session. Takeout (Google) sessions keep the
       // existing age-based restore dahil customer JWT ang hawak nila.

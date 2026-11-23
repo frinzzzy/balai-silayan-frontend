@@ -7,24 +7,23 @@ import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import '../user_session.dart';
 
-/// Resulta ng Google sign-in + backend session bootstrap para sa online
-/// (takeout) na customer. Naglalaman ito ng display identity at ng
-/// server-issued virtual table/session.
-class GoogleAuthResult {
+/// Verified Google customer bago mag-scan ng table QR.
+///
+/// Hindi ito may table/session — ang identity lang ang hawak natin dito. Ang
+/// table session ay ibibigay ng backend pag nag-scan na ang customer.
+class GoogleCustomerIdentity {
+  final int customerId;
   final String displayName;
   final String? email;
   final String? avatarUrl;
-  final int tableId;
-  final int? tableNumber;
-  final int sessionId;
+  final String identityToken;
 
-  const GoogleAuthResult({
+  const GoogleCustomerIdentity({
+    required this.customerId,
     required this.displayName,
     required this.email,
     required this.avatarUrl,
-    required this.tableId,
-    required this.tableNumber,
-    required this.sessionId,
+    required this.identityToken,
   });
 }
 
@@ -37,15 +36,12 @@ class GoogleAuthException implements Exception {
   String toString() => message;
 }
 
-/// Google Sign-In para sa "Order Online / Takeout" door.
+/// Login-first Google Sign-In.
 ///
-/// Flow:
 /// 1. `google_sign_in` -> Google `id_token`
-/// 2. `POST /api/v1/customer/auth/google` -> backend verifies the token
-/// 3. Backend issues the existing `table_session` JWT scoped to the customer's
-///    own virtual table (no shared Table 999).
-/// 4. Dito natin ini-store sa [UserSession] para magamit ng existing
-///    order/status/payment pipeline.
+/// 2. `POST /api/v1/customer/auth/google/identity` -> backend verifies it
+/// 3. Backend returns a customer identity JWT (walang virtual table)
+/// 4. I-save sa [UserSession] at ipasa sa QR scan bilang Authorization header
 class GoogleAuthService {
   GoogleAuthService._();
 
@@ -74,14 +70,33 @@ class GoogleAuthService {
     _initialized = true;
   }
 
-  /// Buksan ang Google account picker at mag-set up ng takeout session.
-  ///
-  /// Throws [GoogleAuthException] na may friendly message kapag na-cancel,
-  /// hindi configured, o tinanggihan ng backend ang token.
-  static Future<GoogleAuthResult> signInWithGoogle() async {
+  /// Kailangan ma-initialize bago i-render ang Google button sa web.
+  static Future<void> ensureInitialized() => _ensureInitialized();
+
+  /// Web-only: ang Google-rendered na button ang may hawak ng sign-in flow
+  /// (hindi supported ang `authenticate()` sa web).
+  static Stream<GoogleCustomerIdentity> webIdentityResults() async* {
+    await _ensureInitialized();
+    await for (final GoogleSignInAuthenticationEvent event
+        in GoogleSignIn.instance.authenticationEvents) {
+      if (event is GoogleSignInAuthenticationEventSignIn) {
+        yield await _verifyIdentity(event.user);
+      }
+    }
+  }
+
+  /// Android/iOS: buksan ang Google account picker at i-verify sa backend.
+  static Future<GoogleCustomerIdentity> signInCustomerIdentity() async {
     await _ensureInitialized();
 
-    GoogleSignInAccount account;
+    if (!GoogleSignIn.instance.supportsAuthenticate()) {
+      throw const GoogleAuthException(
+        'Sa web browser, gamitin ang "Sign in with Google" button na '
+        'ibinigay ng Google.',
+      );
+    }
+
+    final GoogleSignInAccount account;
     try {
       account = await GoogleSignIn.instance.authenticate();
     } on GoogleSignInException catch (error) {
@@ -99,6 +114,12 @@ class GoogleAuthService {
       );
     }
 
+    return _verifyIdentity(account);
+  }
+
+  static Future<GoogleCustomerIdentity> _verifyIdentity(
+    GoogleSignInAccount account,
+  ) async {
     final String? idToken = account.authentication.idToken;
     if (idToken == null || idToken.isEmpty) {
       throw const GoogleAuthException(
@@ -111,10 +132,10 @@ class GoogleAuthService {
     try {
       response = await http
           .post(
-            Uri.parse('${ApiConfig.baseUrl}/api/v1/customer/auth/google'),
-            headers: const <String, String>{
-              'Content-Type': 'application/json',
-            },
+            Uri.parse(
+              '${ApiConfig.baseUrl}/api/v1/customer/auth/google/identity',
+            ),
+            headers: const <String, String>{'Content-Type': 'application/json'},
             body: jsonEncode(<String, dynamic>{'id_token': idToken}),
           )
           .timeout(const Duration(seconds: 25));
@@ -140,58 +161,53 @@ class GoogleAuthService {
     }
 
     // Tolerate both top-level and wrapped ({ data: {...} }) responses.
-    final Map<String, dynamic> payload =
-        decoded['data'] is Map
-            ? Map<String, dynamic>.from(decoded['data'] as Map)
-            : Map<String, dynamic>.from(decoded);
-
-    final int? tableId = int.tryParse((payload['table_id'] ?? '').toString());
-    final int? sessionId = int.tryParse(
-      (payload['session_id'] ?? '').toString(),
-    );
-    final String? sessionToken = payload['session_token']?.toString();
-
-    if (tableId == null || sessionId == null ||
-        sessionToken == null || sessionToken.isEmpty) {
-      throw const GoogleAuthException(
-        'Kulang ang session details mula sa server. Subukan muli.',
-      );
-    }
+    final Map<String, dynamic> payload = decoded['data'] is Map
+        ? Map<String, dynamic>.from(decoded['data'] as Map)
+        : Map<String, dynamic>.from(decoded);
 
     final Map<String, dynamic> customer = payload['customer'] is Map
         ? Map<String, dynamic>.from(payload['customer'] as Map)
         : <String, dynamic>{};
+
+    final int? customerId = int.tryParse(
+      (customer['id'] ?? payload['customer_id'] ?? '').toString(),
+    );
+    final String identityToken =
+        (payload['identity_token'] ?? payload['token'] ?? '').toString().trim();
+
+    if (customerId == null || customerId <= 0 || identityToken.isEmpty) {
+      throw const GoogleAuthException(
+        'Kulang ang identity details mula sa server. Subukan muli.',
+      );
+    }
+
     final String givenName = (customer['given_name'] ?? '').toString().trim();
     final String familyName = (customer['family_name'] ?? '').toString().trim();
-    final String displayName = <String>[
+    final String name = <String>[
       if (givenName.isNotEmpty) givenName,
       if (familyName.isNotEmpty) familyName,
     ].join(' ').trim();
-
-    final String resolvedName = displayName.isNotEmpty
-        ? displayName
+    final String resolvedName = name.isNotEmpty
+        ? name
         : (account.displayName?.trim().isNotEmpty == true
             ? account.displayName!.trim()
             : 'Guest');
 
-    // I-save sa existing session context. Server pa rin ang source of truth —
-    // ang backend ang mag-o-override ng table/session sa order creation.
-    UserSession.setSession(
-      tableId: tableId,
-      tableNumber: int.tryParse((payload['table_number'] ?? '').toString()) ??
-          tableId,
-      sessionNum: sessionId,
-      token: sessionToken,
-      takeout: true,
+    final String? email = (customer['email'] ?? account.email)?.toString();
+
+    UserSession.setCustomerIdentity(
+      customerId: customerId,
+      identityToken: identityToken,
+      displayName: resolvedName,
+      email: email,
     );
 
-    return GoogleAuthResult(
+    return GoogleCustomerIdentity(
+      customerId: customerId,
       displayName: resolvedName,
-      email: (customer['email'] ?? account.email)?.toString(),
+      email: email,
       avatarUrl: (customer['avatar_url'] ?? account.photoUrl)?.toString(),
-      tableId: tableId,
-      tableNumber: int.tryParse((payload['table_number'] ?? '').toString()),
-      sessionId: sessionId,
+      identityToken: identityToken,
     );
   }
 

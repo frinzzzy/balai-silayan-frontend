@@ -15,6 +15,9 @@ import 'services/ordering_gate.dart';
 import 'config/api_config.dart';
 import 'utils/currency.dart';
 
+/// Ang choice ng customer sa checkout. Null = hindi pa pumili.
+enum FulfillmentChoice { dineIn, takeout }
+
 class CheckoutScreen extends StatefulWidget {
   final Map<FoodItem, int> cart;
 
@@ -44,14 +47,15 @@ class CheckoutScreen extends StatefulWidget {
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
   bool _isSubmitting = false;
-  bool _takeoutOverride = false;
+
+  /// Required choice sa checkout. Additional orders inherit the previous
+  /// choice; ang bagong order ay kailangang pumili bago makapag-place.
+  FulfillmentChoice? _fulfillment;
   late Map<FoodItem, int> _editableCart;
   late double _calculatedTotal;
   late final String _orderNotes;
 
-  /// Effective takeout preference — mula sa widget (Google takeout) o sa
-  /// customer (toggle sa dine-in checkout: "Take Out / To-Go").
-  bool get _effectiveIsTakeout => widget.isTakeout || _takeoutOverride;
+  bool get _effectiveIsTakeout => _fulfillment == FulfillmentChoice.takeout;
 
   String get _baseUrl => ApiConfig.baseUrl;
 
@@ -61,6 +65,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     _editableCart = Map.from(widget.cart);
     _calculatedTotal = _calculateCartTotal();
     _orderNotes = CustomerCartStore.specialInstructions;
+    if (widget.isAdditionalOrder) {
+      _fulfillment = widget.isTakeout || UserSession.isTakeout
+          ? FulfillmentChoice.takeout
+          : FulfillmentChoice.dineIn;
+    }
   }
 
   String _generateUuidV4() {
@@ -135,16 +144,30 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return;
     }
 
+    if (_fulfillment == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pumili muna ng Dine In o Take Out bago mag-place order.'),
+          backgroundColor: Color(0xFF8E5136),
+        ),
+      );
+      return;
+    }
+
+    if (UserSession.customerId == null ||
+        (UserSession.identityToken ?? '').isEmpty) {
+      UserSession.clearSession();
+      CustomerNavigation.navigatorPushWelcome(context);
+      return;
+    }
+
     setState(() => _isSubmitting = true);
 
-    // Takeout: the Google sign-in already gave us the customer's own virtual
-    // table + session. Never fall back to a real dine-in table.
-    // Takeout override (dine-in customer choosing Take Out / To-Go): itinatago
-    // natin ang fulfillment_type sa backend, pero pinapanatili natin ang
-    // physical table/session (hal. Table 5) na naka-attach sa QR flow.
-    final int targetTableId = _effectiveIsTakeout
-        ? (UserSession.activeTableId ?? widget.tableId ?? 1)
-        : (widget.tableId ?? UserSession.activeTableId ?? 7);
+    // Login-first flow: iisang physical table/session ang pinanggalingan ng
+    // scan. Ang Dine In / Take Out ay fulfillment_type lang sa order — hindi
+    // na nagpapalit ng table o session.
+    final int targetTableId =
+        widget.tableId ?? UserSession.activeTableId ?? 1;
 
     final List<Map<String, dynamic>> orderItemsPayload = _editableCart.entries.map((entry) {
       final item = entry.key;
@@ -164,29 +187,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     final String idempotencyKey = _generateUuidV4();
 
-    int? targetSessionId = UserSession.activeSessionId ??
+    final int? targetSessionId = UserSession.activeSessionId ??
         int.tryParse(UserSession.sessionId ?? '');
 
+    // Kung walang scanned session, kailangan mag-login at mag-scan ulit.
     if (targetSessionId == null) {
-      try {
-        final sessionRes = await http.post(
-          Uri.parse('$_baseUrl/api/v1/dev/force-active-session'),
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode({"table_id": targetTableId}),
-        ).timeout(const Duration(seconds: 15));
-        if (sessionRes.statusCode == 200) {
-          final resData = jsonDecode(sessionRes.body);
-          final data = resData['data'];
-          if (data != null && data['session_id'] != null) {
-            targetSessionId = int.tryParse(data['session_id'].toString());
-            UserSession.activeSessionId = targetSessionId;
-            UserSession.sessionId = targetSessionId?.toString();
-            if (data['session_token'] != null) {
-              UserSession.customerSessionToken = data['session_token'].toString();
-            }
-          }
-        }
-      } catch (_) {}
+      setState(() => _isSubmitting = false);
+      UserSession.clearSession();
+      CustomerNavigation.navigatorPushWelcome(context);
+      return;
     }
 
     final bool isAdditional = widget.isAdditionalOrder || UserSession.isAdditionalOrder;
@@ -316,61 +325,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           return;
         }
 
-        if (response.statusCode == 401 || response.statusCode == 403 ||
-            (errorMessage.toLowerCase().contains('session') &&
-            (errorMessage.toLowerCase().contains('active') || errorMessage.toLowerCase().contains('not active') || errorMessage.toLowerCase().contains('unauthorized')))) {
-          try {
-            final sessionRes = await http.post(
-              Uri.parse('$_baseUrl/api/v1/dev/force-active-session'),
-              headers: {"Content-Type": "application/json"},
-              body: jsonEncode({"table_id": targetTableId}),
-            );
-            if (sessionRes.statusCode == 200) {
-              final resData = jsonDecode(sessionRes.body);
-              final data = resData['data'];
-              if (data != null && data['session_id'] != null) {
-                final int newSessionId = int.parse(data['session_id'].toString());
-                UserSession.activeSessionId = newSessionId;
-                UserSession.sessionId = newSessionId.toString();
-                if (data['session_token'] != null) {
-                  UserSession.customerSessionToken = data['session_token'].toString();
-                }
-
-                transactionBody["session_id"] = newSessionId;
-                final retryResponse = await http.post(
-                  Uri.parse('$_baseUrl/api/v1/orders'),
-                  headers: reqHeaders,
-                  body: jsonEncode(transactionBody),
-                );
-
-                if (retryResponse.statusCode == 201 || retryResponse.statusCode == 200) {
-                  final Map<String, dynamic> retryData = jsonDecode(retryResponse.body);
-                  final dynamic createdOrderData = retryData['data']?['order'] ?? retryData['data'];
-                  final dynamic generatedOrderId = createdOrderData?['id'] ?? createdOrderData?['order_id'] ?? DateTime.now().millisecondsSinceEpoch;
-
-                  _saveOrderSessionAndJoinSocketRooms(
-                    createdOrderData: createdOrderData,
-                    generatedOrderId: generatedOrderId,
-                    targetTableId: targetTableId,
-                    targetSessionId: newSessionId,
-                    initialOrderItems: orderItemsPayload,
-                    linkedParentOrderId: finalParentId,
-                  );
-
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Order submitted successfully to kitchen!'),
-                        backgroundColor: Color(0xFF203F35),
-                      ),
-                    );
-                    _navigateToStatusTracking(generatedOrderId);
-                  }
-                  return;
-                }
-              }
-            }
-          } catch (_) {}
+        // Walang valid Google identity o expired session — pabalik sa login,
+        // hindi na gumagawa ng bagong session na walang customer.
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          if (!mounted) return;
+          setState(() => _isSubmitting = false);
+          UserSession.clearSession();
+          CustomerNavigation.navigatorPushWelcome(context);
+          return;
         }
 
         // AUTO-HEAL KUNG 404 PARENT ORDER NOT FOUND
@@ -735,35 +697,119 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  /// Door 1 (dine-in via QR): kapag nakaupo sa mesa ang customer at pinili
-  /// ng takeout, i-toggle lang natin ito dito — walang QR re-scan, hindi na
-  /// login, at pati na ang fulfillment_type (TAKEOUT) sa backend.
-  Widget _buildTakeoutToggleCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF203F35),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.shopping_bag_outlined, color: const Color(0xFFA47C3D)),
-          const SizedBox(width: 12),
-          Expanded(
+  /// Dalawang box sa taas ng checkout — required ang pagpili bago mag-order.
+  Widget _buildFulfillmentSelector() {
+    final int tableNum = widget.tableId ?? UserSession.activeTableId ?? 0;
+    final String tableLabel = tableNum > 0
+        ? 'Table #${tableNum.toString().padLeft(2, '0')}'
+        : 'Naka-scan na mesa';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'ORDER TYPE',
+          style: TextStyle(
+            fontSize: 10.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.4,
+            color: Color(0xFFA47C3D),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: _buildFulfillmentBox(
+                choice: FulfillmentChoice.dineIn,
+                icon: Icons.table_restaurant_outlined,
+                title: 'Dine In',
+                subtitle: tableLabel,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildFulfillmentBox(
+                choice: FulfillmentChoice.takeout,
+                icon: Icons.shopping_bag_outlined,
+                title: 'Take Out',
+                subtitle: 'Google account ang gamit',
+              ),
+            ),
+          ],
+        ),
+        if (_fulfillment == null)
+          const Padding(
+            padding: EdgeInsets.only(top: 10),
             child: Text(
-              widget.isTakeout
-                  ? 'Dining Preference: Takeout / To-Go'
-                  : 'Dining Preference: Dine-In (Table #${(widget.tableId ?? 7).toString().padLeft(2, '0')})',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+              'Pumili muna ng Dine In o Take Out bago mag-place order.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF8E5136)),
             ),
           ),
-          Switch(
-            value: _effectiveIsTakeout,
-            onChanged: (bool value) {
-              setState(() => _takeoutOverride = value);
-            },
+      ],
+    );
+  }
+
+  Widget _buildFulfillmentBox({
+    required FulfillmentChoice choice,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    final bool selected = _fulfillment == choice;
+    return InkWell(
+      onTap: () => setState(() => _fulfillment = choice),
+      borderRadius: BorderRadius.circular(16),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF203F35) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected
+                ? const Color(0xFFA47C3D)
+                : const Color(0xFFE3D8C6),
+            width: selected ? 2 : 1,
           ),
-        ],
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 22,
+              color: selected ? const Color(0xFFD2B27C) : const Color(0xFF6E7A6E),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: selected ? Colors.white : const Color(0xFF203F35),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      color: selected
+                          ? const Color(0xFFD8D2C4)
+                          : const Color(0xFF788078),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (selected)
+              const Icon(Icons.check_circle, size: 18, color: Color(0xFFD2B27C)),
+          ],
+        ),
       ),
     );
   }
@@ -817,37 +863,36 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           : ListView(
                               padding: const EdgeInsets.all(16),
                               children: [
-                                Container(
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF203F35),
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        widget.isTakeout ? Icons.shopping_bag_outlined : Icons.table_restaurant_outlined,
-                                        color: const Color(0xFFA47C3D),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Text(
-                                          widget.isTakeout
-                                              ? 'Dining Preference: Takeout / To-Go'
-                                              : (isAdditional && parentOrderId != null
-                                                  ? 'Additional Order for Table #${displayTableNum.toString().padLeft(2, '0')} (Main: $parentOrderId)'
-                                                  : 'Dining Preference: Dine-In (Table #${displayTableNum.toString().padLeft(2, '0')})'),
-                                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
+                                _buildFulfillmentSelector(),
                                 const SizedBox(height: 24),
-                                if (!widget.isAdditionalOrder && !widget.isTakeout) ...[
-                                  _buildTakeoutToggleCard(),
+                                if (isAdditional && parentOrderId != null)
+                                  Container(
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF203F35),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.receipt_long_outlined,
+                                          color: Color(0xFFA47C3D),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            'Additional Order for Table #${displayTableNum.toString().padLeft(2, '0')} (Main: $parentOrderId)',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                if (isAdditional && parentOrderId != null)
                                   const SizedBox(height: 24),
-                                ],
                                 if (_orderNotes.isNotEmpty) ...[
                                   _buildSpecialInstructionsSummaryCard(),
                                   const SizedBox(height: 24),
@@ -1096,7 +1141,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   elevation: 0,
                 ),
-                onPressed: _submitOrderToBackend,
+                onPressed: _fulfillment == null ? null : _submitOrderToBackend,
                 child: const Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [

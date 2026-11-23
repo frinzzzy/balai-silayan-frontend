@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'services/supabase_realtime_service.dart';
 import 'widgets/session_notice_sheet.dart';
+import 'welcome_screen.dart';
 
 class QrScannerScreen extends StatefulWidget {
   const QrScannerScreen({super.key});
@@ -28,6 +29,18 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
   void dispose() {
     _scannerController.dispose();
     super.dispose();
+  }
+
+  /// Palaging bumabalik sa Welcome/login — kahit itong scanner ang root page
+  /// (walang route sa ilalim) o kahit may restored session mula sa nakaraang
+  /// QR scan. `maybePop` lang dati kaya minsan walang nangyayari sa back.
+  Future<void> _backToWelcome() async {
+    UserSession.clearSession();
+    if (!mounted) return;
+    await Navigator.of(context).pushAndRemoveUntil<void>(
+      MaterialPageRoute<void>(builder: (_) => const WelcomeScreen()),
+      (route) => false,
+    );
   }
 
   Future<void> _handleScan(String scannedValue) async {
@@ -57,7 +70,15 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
           ? cleanVal
           : '${ApiConfig.baseUrl}/api/session/scan/$cleanVal');
 
-      final response = await http.get(scanUri).timeout(
+      // Login-first flow: ang Google identity token ang nagpapatunay kung
+      // kaninong customer ang mesa. Ito ang basis ng customer_id sa session.
+      final String? identityToken = UserSession.identityToken;
+      final Map<String, String> scanHeaders = <String, String>{
+        if (identityToken != null && identityToken.isNotEmpty)
+          'Authorization': 'Bearer $identityToken',
+      };
+
+      final response = await http.get(scanUri, headers: scanHeaders).timeout(
             const Duration(seconds: 30),
           );
 
@@ -98,12 +119,17 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
         final int tableNumber =
             int.tryParse(rawTableNumber?.toString() ?? '') ?? tableId;
 
-        UserSession.setSession(
+        final dynamic rawCustomer = decoded['customer'];
+        final Map<String, dynamic>? scannedCustomer =
+            rawCustomer is Map ? Map<String, dynamic>.from(rawCustomer) : null;
+
+        UserSession.setScannedSession(
           tableId: tableId,
           tableNumber: tableNumber,
           sessionNum: sessionId,
           token: sessionToken,
           qr: cleanVal,
+          customer: scannedCustomer,
         );
         unawaited(SupabaseRealtimeService.instance.onSessionChanged());
 
@@ -123,6 +149,58 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
               ),
             ),
           );
+        }
+        return;
+      }
+
+      // Walang Google identity — pabalik sa Welcome para mag-sign in ulit.
+      if (response.statusCode == 401) {
+        if (mounted) {
+          final bool? goLogin = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: AppTheme.surfaceIvory,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              title: const Text(
+                'Sign in required',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.primaryCrimson,
+                ),
+              ),
+              content: const Text(
+                'Kailangan mag-sign in gamit ang Google bago mag-scan at '
+                'mag-order. Subukan muli pagkatapos mag-sign in.',
+                style: TextStyle(fontSize: 13, color: Color(0xFF203F35)),
+              ),
+              actions: [
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primaryCrimson,
+                  ),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text(
+                    'Back to Sign In',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          );
+          if (goLogin == true) {
+            _scannerController.stop();
+            UserSession.clearSession();
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const WelcomeScreen(),
+                settings: const RouteSettings(name: 'welcome'),
+              ),
+            );
+          }
         }
         return;
       }
@@ -462,7 +540,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   InkWell(
-                    onTap: () => Navigator.maybePop(context),
+                    onTap: _backToWelcome,
                     borderRadius: BorderRadius.circular(22),
                     child: Container(
                       width: 44,

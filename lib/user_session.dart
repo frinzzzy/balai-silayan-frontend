@@ -12,6 +12,14 @@ class UserSession {
   static String? authToken;
   static String? customerSessionToken;
 
+  /// Google identity mula sa login-first flow. `identityToken` ang ipinapasa
+  /// sa QR scan; `customerSessionToken` naman ang scans-issued table token na
+  /// gagamitin sa pag-order.
+  static int? customerId;
+  static String? customerName;
+  static String? customerEmail;
+  static String? identityToken;
+
   static bool isAdditionalOrder = false;
   static String? targetParentOrderId;
   static dynamic firstOrderId;
@@ -141,6 +149,55 @@ class UserSession {
     persist();
   }
 
+  /// I-save ang verified Google customer bago mag-scan ng table QR.
+  static void setCustomerIdentity({
+    required int customerId,
+    required String identityToken,
+    String? displayName,
+    String? email,
+  }) {
+    UserSession.customerId = customerId;
+    UserSession.identityToken = identityToken;
+    if (displayName != null && displayName.trim().isNotEmpty) {
+      UserSession.customerName = displayName.trim();
+    }
+    if (email != null && email.trim().isNotEmpty) {
+      UserSession.customerEmail = email.trim();
+    }
+    _suppressPersist = false;
+    persist();
+  }
+
+  /// I-save ang table session token na ibinigay ng QR scan, kasama ang
+  /// customer info mula sa backend. Dine-in ang default; ang checkout ang
+  /// magpili kung DINE_IN o TAKEOUT ang fulfillment.
+  static void setScannedSession({
+    required int tableId,
+    required int tableNumber,
+    required dynamic sessionNum,
+    required String token,
+    required String qr,
+    Map<String, dynamic>? customer,
+  }) {
+    setSession(
+      tableId: tableId,
+      tableNumber: tableNumber,
+      sessionNum: sessionNum,
+      token: token,
+      qr: qr,
+      takeout: false,
+    );
+    if (customer != null) {
+      final int? id = int.tryParse(customer['id']?.toString() ?? '');
+      if (id != null && id > 0) customerId = id;
+      final String? email = customer['email']?.toString().trim();
+      if (email != null && email.isNotEmpty) customerEmail = email;
+      final String? name = customer['customer_name']?.toString().trim();
+      if (name != null && name.isNotEmpty) customerName = name;
+    }
+    persist();
+  }
+
   // Ginagamit pagkatapos mag-submit ng order para i-store ang huling order details
   static void setLastPlacedOrder({
     required dynamic orderId,
@@ -172,6 +229,7 @@ class UserSession {
     if (_suppressPersist) return;
     if (authToken == null &&
         customerSessionToken == null &&
+        identityToken == null &&
         qrToken == null &&
         activeTableId == null &&
         !isTakeout) {
@@ -190,6 +248,10 @@ class UserSession {
       'qrToken': qrToken,
       'authToken': authToken,
       'customerSessionToken': customerSessionToken,
+      'customerId': customerId,
+      'customerName': customerName,
+      'customerEmail': customerEmail,
+      'identityToken': identityToken,
       'lastPlacedOrderId': lastPlacedOrderId?.toString(),
       'lastPlacedOrderTotal': lastPlacedOrderTotal,
       'autoAdditionalParentId': autoAdditionalParentId?.toString(),
@@ -215,12 +277,15 @@ class UserSession {
         json['authToken']?.toString();
     final int? tableId = int.tryParse('${json['activeTableId'] ?? ''}');
     final bool takeout = json['isTakeout'] == true;
+    final String? savedIdentity = json['identityToken']?.toString();
+    final bool hasIdentity = savedIdentity != null && savedIdentity.isNotEmpty;
 
-    // Walang ma-restore kung walang token/table/QR man lang.
+    // Walang ma-restore kung walang token/table/QR/identity man lang.
     if ((token == null || token.isEmpty) &&
         tableId == null &&
         !takeout &&
-        json['qrToken'] == null) {
+        json['qrToken'] == null &&
+        !hasIdentity) {
       return false;
     }
 
@@ -233,6 +298,10 @@ class UserSession {
     qrToken = json['qrToken']?.toString();
     authToken = json['authToken']?.toString();
     customerSessionToken = json['customerSessionToken']?.toString();
+    customerId = int.tryParse('${json['customerId'] ?? ''}');
+    customerName = json['customerName']?.toString();
+    customerEmail = json['customerEmail']?.toString();
+    identityToken = hasIdentity ? savedIdentity : null;
     lastPlacedOrderId = json['lastPlacedOrderId']?.toString();
     lastPlacedOrderTotal =
         double.tryParse('${json['lastPlacedOrderTotal'] ?? ''}') ?? 0.0;
@@ -251,6 +320,10 @@ class UserSession {
     qrToken = null;
     authToken = null;
     customerSessionToken = null;
+    customerId = null;
+    customerName = null;
+    customerEmail = null;
+    identityToken = null;
     resetForNewOrder();
     unawaited(
       SessionPersistence.instance.clear().whenComplete(() {
