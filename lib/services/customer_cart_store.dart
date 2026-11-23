@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../user_session.dart';
+import 'session_persistence.dart';
 
 /// Isang linya sa customer cart. Hindi ito naka-depende sa `FoodItem` para
 /// maiwasan ang circular import sa `menu_screen.dart`.
@@ -22,6 +25,36 @@ class CartLine {
     this.isAvailable = true,
     this.imageUrl,
   });
+
+  /// Para sa local persistence (mabuhay kahit i-kill ang app).
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'itemDbId': itemDbId,
+        'name': name,
+        'price': price,
+        'categoryId': categoryId,
+        'isAvailable': isAvailable,
+        'imageUrl': imageUrl,
+        'quantity': quantity,
+      };
+
+  static CartLine? fromJson(Map<String, dynamic> json) {
+    final int? id = int.tryParse('${json['itemDbId'] ?? ''}');
+    final String name = '${json['name'] ?? ''}'.trim();
+    if (id == null || name.isEmpty) return null;
+    final double price =
+        double.tryParse('${json['price'] ?? ''}') ?? 0.0;
+    final int quantity = int.tryParse('${json['quantity'] ?? ''}') ?? 0;
+    if (quantity <= 0) return null;
+    return CartLine(
+      itemDbId: id,
+      name: name,
+      price: price,
+      categoryId: int.tryParse('${json['categoryId'] ?? ''}') ?? 0,
+      quantity: quantity,
+      isAvailable: json['isAvailable'] != false,
+      imageUrl: json['imageUrl']?.toString(),
+    );
+  }
 }
 
 /// Session-scoped na imbakan ng cart items.
@@ -53,6 +86,7 @@ class CustomerCartStore {
     if (normalized == _specialInstructions) return;
     _specialInstructions = normalized;
     specialInstructionsNotifier.value = normalized;
+    _persistToDisk();
   }
 
   static String _currentKey() {
@@ -88,17 +122,54 @@ class CustomerCartStore {
       ..clear()
       ..addEntries(lines.map((line) => MapEntry(line.itemDbId, line)));
     revision.value++;
+    _persistToDisk();
   }
 
   static void clear() {
     _savedKey = _currentKey();
     final bool hadNotes = _specialInstructions.isNotEmpty;
+    final bool hadLines = _lines.isNotEmpty;
     if (hadNotes) {
       _specialInstructions = '';
       specialInstructionsNotifier.value = '';
     }
-    if (_lines.isEmpty) return;
+    if (!hadLines && !hadNotes) return;
     _lines.clear();
+    revision.value++;
+    _persistToDisk();
+  }
+
+  /// Isinusulat sa `SharedPreferences` ang cart at notes para mabuhay kahit
+  /// ma-kill ang app.
+  static void _persistToDisk() {
+    unawaited(
+      SessionPersistence.instance.saveCart(
+        _currentKey(),
+        _lines.values.map((line) => line.toJson()).toList(growable: false),
+        _specialInstructions,
+      ),
+    );
+  }
+
+  /// Ibinabalik ang cart mula sa `SharedPreferences`. Tinatawag ito ng
+  /// `SessionBootstrap` bago mag-`runApp`.
+  static Future<void> restoreFromDisk() async {
+    final String key = _currentKey();
+    final List<Map<String, dynamic>> raw =
+        await SessionPersistence.instance.loadCart(key);
+    if (raw.isEmpty) {
+      _savedKey = key;
+      return;
+    }
+    final String notes = await SessionPersistence.instance.loadNotes(key);
+    _lines.clear();
+    for (final Map<String, dynamic> row in raw) {
+      final CartLine? line = CartLine.fromJson(row);
+      if (line != null) _lines[line.itemDbId] = line;
+    }
+    _specialInstructions = notes;
+    specialInstructionsNotifier.value = notes;
+    _savedKey = key;
     revision.value++;
   }
 

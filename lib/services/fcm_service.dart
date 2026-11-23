@@ -4,11 +4,14 @@ import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import '../user_session.dart';
+import 'audio_notification_service.dart';
+import 'notification_router.dart';
 
 /// FCM background handler — kapag PATAY o naka-background ang app, ito ang
 /// mag-a-post ng notification sa system tray (gamit ang existing local
@@ -16,6 +19,23 @@ import '../user_session.dart';
 @pragma('vm:entry-point')
 Future<void> fcmBackgroundMessageHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+
+  final String title =
+      message.notification?.title?.toString() ??
+      message.data['title']?.toString() ??
+      'Balai Silayan';
+  final String body = message.notification?.body?.toString() ??
+      message.data['body']?.toString() ??
+      '';
+
+  // I-save sa persistent history kahit naka-kill ang app — ito ang makikita
+  // ng customer sa bell pagbalik niya (hindi lang sa system tray).
+  await AudioNotificationService.recordRemoteMessage(
+    title: title,
+    body: body,
+    groupKey: message.data['order_id']?.toString(),
+    data: message.data,
+  );
 
   // Kapag may `notification` payload, ang Android FCM SDK na mismo ang
   // nagdi-display sa tray. Huwag nang mag-show muli para hindi doble.
@@ -57,10 +77,6 @@ Future<void> fcmBackgroundMessageHandler(RemoteMessage message) async {
     ),
   );
 
-  final String title =
-      message.data['title']?.toString() ?? 'Balai Silayan';
-  final String body = message.data['body']?.toString() ?? '';
-
   await plugin.show(
     id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
     title: title,
@@ -81,7 +97,7 @@ Future<void> fcmBackgroundMessageHandler(RemoteMessage message) async {
         icon: 'ic_stat_balai',
       ),
     ),
-    payload: message.data['order_id']?.toString(),
+    payload: jsonEncode(message.data),
   );
 }
 
@@ -111,6 +127,85 @@ class FcmService {
         FirebaseMessaging.onBackgroundMessage(fcmBackgroundMessageHandler);
         _backgroundHandlerRegistered = true;
       }
+
+      // Tap sa push notification (app naka-background o naka-kill): buksan ang
+      // Notification History para makita agad ng admin/customer ang nangyari.
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        NotificationRouter.handle(message.data);
+      });
+      try {
+        final RemoteMessage? initialMessage =
+            await FirebaseMessaging.instance.getInitialMessage();
+        if (initialMessage != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            NotificationRouter.handle(initialMessage.data);
+          });
+        }
+      } catch (e) {
+        debugPrint('⚠️ [FCM] getInitialMessage failed: $e');
+      }
+
+      // Foreground: i-display din ang notification (data o notification payload)
+      // para consistent ang alert habang nasa app ang customer — kasama na rin
+      // ang background handler para sa data-only messages.
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+        if (message.notification == null) {
+          // Data-only: handler ang magre-record sa history at magpapakita.
+          await fcmBackgroundMessageHandler(message);
+          return;
+        }
+
+        await AudioNotificationService.recordRemoteMessage(
+          title: message.notification?.title?.toString() ?? 'Balai Silayan',
+          body: message.notification?.body?.toString() ?? '',
+          groupKey: message.data['order_id']?.toString(),
+          data: message.data,
+        );
+
+        final FlutterLocalNotificationsPlugin plugin =
+            FlutterLocalNotificationsPlugin();
+        await plugin.initialize(
+          settings: const InitializationSettings(
+            android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          ),
+          onDidReceiveNotificationResponse: (NotificationResponse response) {
+            NotificationRouter.handlePayload(response.payload);
+          },
+        );
+        final AndroidFlutterLocalNotificationsPlugin? android =
+            plugin.resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>();
+        await android?.createNotificationChannel(
+          const AndroidNotificationChannel(
+            'balai_silayan_orders_v2',
+            'Balai Silayan Order Alerts',
+            description: 'Balai Silayan order status alerts',
+            importance: Importance.high,
+            playSound: true,
+            sound: RawResourceAndroidNotificationSound('notification_ring'),
+            enableVibration: true,
+          ),
+        );
+        await plugin.show(
+          id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          title: message.notification?.title?.toString() ?? 'Balai Silayan',
+          body: message.notification?.body?.toString() ?? '',
+          notificationDetails: const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'balai_silayan_orders_v2',
+              'Balai Silayan Order Alerts',
+              channelDescription: 'Balai Silayan order status alerts',
+              importance: Importance.high,
+              priority: Priority.high,
+              playSound: true,
+              sound: RawResourceAndroidNotificationSound('notification_ring'),
+              enableVibration: true,
+              icon: 'ic_stat_balai',
+            ),
+          ),
+          payload: jsonEncode(message.data),
+        );
+      });
 
       if (!_tokenRefreshListening) {
         _tokenRefreshListening = true;

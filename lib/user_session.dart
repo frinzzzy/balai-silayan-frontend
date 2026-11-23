@@ -1,3 +1,7 @@
+import 'dart:async';
+
+import 'services/session_persistence.dart';
+
 class UserSession {
   static String? sessionId;
   static int? activeSessionId;
@@ -62,6 +66,10 @@ class UserSession {
   }
 
   static bool get isLoggedIn => authToken != null && authToken!.isNotEmpty;
+
+  /// Kapag `true`, hindi muna nagsusulat sa local storage (ginagamit habang
+  /// nag-clear ng session para hindi ma-resurrect ng pending write ang data).
+  static bool _suppressPersist = false;
 
   static String formatOrderCode(dynamic orderId) {
     if (orderId == null) return '#BS-0001';
@@ -129,6 +137,8 @@ class UserSession {
       qrToken = qr;
     }
     isTakeout = takeout;
+    _suppressPersist = false;
+    persist();
   }
 
   // Ginagamit pagkatapos mag-submit ng order para i-store ang huling order details
@@ -142,6 +152,7 @@ class UserSession {
     if (items != null) {
       lastPlacedOrderItems = items;
     }
+    persist();
   }
 
   static void resetForNewOrder() {
@@ -154,7 +165,84 @@ class UserSession {
     lastPlacedOrderItems = [];
   }
 
+  /// Isinusulat sa local storage ang kasalukuyang session para ma-restore
+  /// kapag na-kill/na-restart ang app. Fire-and-forget — hindi hinihintay ng
+  /// UI para hindi bumagal ang kahit anong tap.
+  static void persist() {
+    if (_suppressPersist) return;
+    if (authToken == null &&
+        customerSessionToken == null &&
+        qrToken == null &&
+        activeTableId == null &&
+        !isTakeout) {
+      return;
+    }
+    unawaited(SessionPersistence.instance.saveSession(toPersistedJson()));
+  }
+
+  static Map<String, dynamic> toPersistedJson() {
+    return <String, dynamic>{
+      'sessionId': sessionId,
+      'activeSessionId': activeSessionId,
+      'activeTableId': activeTableId,
+      'activeTableNumber': activeTableNumber,
+      'isTakeout': isTakeout,
+      'qrToken': qrToken,
+      'authToken': authToken,
+      'customerSessionToken': customerSessionToken,
+      'lastPlacedOrderId': lastPlacedOrderId?.toString(),
+      'lastPlacedOrderTotal': lastPlacedOrderTotal,
+      'autoAdditionalParentId': autoAdditionalParentId?.toString(),
+      'targetParentOrderId': targetParentOrderId,
+    };
+  }
+
+  /// Ibinabalik ang dating session mula sa local storage.
+  ///
+  /// Nagbabalik ng `false` kapag walang session, o mas matanda na ito sa
+  /// [SessionPersistence.maxSessionAge] (malamang expired na ang JWT).
+  static bool applyPersisted(Map<String, dynamic> json) {
+    final int savedAt =
+        int.tryParse('${json['savedAt'] ?? ''}') ?? 0;
+    if (savedAt <= 0) return false;
+    final Duration age = DateTime.now()
+        .difference(DateTime.fromMillisecondsSinceEpoch(savedAt));
+    if (age > SessionPersistence.maxSessionAge || age.isNegative) {
+      return false;
+    }
+
+    final String? token = json['customerSessionToken']?.toString() ??
+        json['authToken']?.toString();
+    final int? tableId = int.tryParse('${json['activeTableId'] ?? ''}');
+    final bool takeout = json['isTakeout'] == true;
+
+    // Walang ma-restore kung walang token/table/QR man lang.
+    if ((token == null || token.isEmpty) &&
+        tableId == null &&
+        !takeout &&
+        json['qrToken'] == null) {
+      return false;
+    }
+
+    activeSessionId = int.tryParse('${json['activeSessionId'] ?? ''}');
+    sessionId = json['sessionId']?.toString() ??
+        activeSessionId?.toString();
+    activeTableId = tableId;
+    activeTableNumber = int.tryParse('${json['activeTableNumber'] ?? ''}');
+    isTakeout = takeout;
+    qrToken = json['qrToken']?.toString();
+    authToken = json['authToken']?.toString();
+    customerSessionToken = json['customerSessionToken']?.toString();
+    lastPlacedOrderId = json['lastPlacedOrderId']?.toString();
+    lastPlacedOrderTotal =
+        double.tryParse('${json['lastPlacedOrderTotal'] ?? ''}') ?? 0.0;
+    autoAdditionalParentId = json['autoAdditionalParentId']?.toString();
+    targetParentOrderId = json['targetParentOrderId']?.toString();
+    return true;
+  }
+
   static void clearSession() {
+    _suppressPersist = true;
     sessionId = null;
     activeSessionId = null;
     activeTableId = null;
@@ -164,5 +252,10 @@ class UserSession {
     authToken = null;
     customerSessionToken = null;
     resetForNewOrder();
+    unawaited(
+      SessionPersistence.instance.clear().whenComplete(() {
+        _suppressPersist = false;
+      }),
+    );
   }
 }

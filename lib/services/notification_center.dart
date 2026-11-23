@@ -13,6 +13,10 @@ class NotificationPayload {
     required this.icon,
     this.duration = const Duration(seconds: 3),
     this.groupKey,
+    this.routeType,
+    this.orderId,
+    this.itemName,
+    this.itemId,
   });
 
   final String title;
@@ -23,6 +27,12 @@ class NotificationPayload {
 
   /// Optional grouping key para sa notification history.
   final String? groupKey;
+
+  /// Navigation metadata para sa in-app notification history taps.
+  final String? routeType;
+  final String? orderId;
+  final String? itemName;
+  final String? itemId;
 }
 
 /// Sentral na presentation at dedupe ng lahat ng notification.

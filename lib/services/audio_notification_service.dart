@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -6,9 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../user_session.dart';
 import 'notification_center.dart';
+import 'notification_router.dart';
 
 class NotificationRecord {
   final String title;
@@ -21,6 +24,13 @@ class NotificationRecord {
   /// ang ticket code na naka-extract mula sa title (legacy behavior).
   final String? groupKey;
 
+  /// Navigation metadata para sa IN-APP Notification History taps.
+  /// Null = customer/legacy notification na walang admin destination.
+  final String? routeType;
+  final String? orderId;
+  final String? itemName;
+  final String? itemId;
+
   NotificationRecord({
     required this.title,
     required this.message,
@@ -28,7 +38,26 @@ class NotificationRecord {
     required this.backgroundColor,
     required this.icon,
     this.groupKey,
+    this.routeType,
+    this.orderId,
+    this.itemName,
+    this.itemId,
   });
+
+  /// Kung may tamang destination ito pag tinap sa history.
+  ///
+  /// Basta may `order_id`, order-related pa rin ito kahit walang `type`
+  /// (lumang backend payload) — kaya napipindot pa rin papunta sa ticket.
+  bool get hasRoute =>
+      (routeType ?? '').trim().isNotEmpty || (orderId ?? '').trim().isNotEmpty;
+
+  /// Payload na inaabot kay NotificationRouter pag tinap ang history tile.
+  Map<String, dynamic> get routeData => <String, dynamic>{
+        'type': routeType ?? '',
+        if (orderId != null) 'order_id': orderId,
+        if (itemName != null) 'item_name': itemName,
+        if (itemId != null) 'item_id': itemId,
+      };
 }
 
 class AudioNotificationService {
@@ -39,6 +68,162 @@ class AudioNotificationService {
   static int unseenHistoryCount = 0;
 
   static void markHistorySeen() => unseenHistoryCount = 0;
+
+  /// History ay sine-save sa disk kaya hindi nawawala kapag pinatay ang app.
+  /// Ito ang nagbibigay ng "alam ko kung anong nangyari" pagbalik ng customer.
+  static const String _historyStorageKey = 'balai_notification_history_v2';
+
+  /// I-load ang na-save na history. Returns bilang ng BAGONG records na
+  /// na-load (gagamitin para magpakita ng resume summary banner).
+  static Future<int> loadPersistedHistory() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? raw = prefs.getString(_historyStorageKey);
+      if (raw == null || raw.isEmpty) return 0;
+
+      final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+      final Set<String> existing = history
+          .map(
+            (NotificationRecord r) =>
+                '${r.timestamp.microsecondsSinceEpoch}|${r.title}|${r.message}',
+          )
+          .toSet();
+
+      int added = 0;
+      for (final dynamic item in decoded) {
+        if (item is! Map<String, dynamic>) continue;
+        final int? micros = item['timestamp'] is int
+            ? item['timestamp'] as int
+            : int.tryParse(item['timestamp']?.toString() ?? '');
+        if (micros == null) continue;
+        final String title = (item['title'] ?? '').toString();
+        final String message = (item['message'] ?? '').toString();
+        final String key = '$micros|$title|$message';
+        if (existing.contains(key)) continue;
+
+        final int argb = item['color'] is int
+            ? item['color'] as int
+            : 0xFF203F35;
+        history.add(
+          NotificationRecord(
+            title: title,
+            message: message,
+            timestamp: DateTime.fromMicrosecondsSinceEpoch(micros),
+            backgroundColor: Color.fromARGB(
+              (argb >> 24) & 0xFF,
+              (argb >> 16) & 0xFF,
+              (argb >> 8) & 0xFF,
+              argb & 0xFF,
+            ),
+            icon: Icons.notifications_active,
+            groupKey: item['groupKey']?.toString(),
+            routeType: item['routeType']?.toString(),
+            orderId: item['orderId']?.toString(),
+            itemName: item['itemName']?.toString(),
+            itemId: item['itemId']?.toString(),
+          ),
+        );
+        unseenHistoryCount++;
+        added++;
+      }
+
+      if (added > 0) {
+        history.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        const int maxRecords = 200;
+        if (history.length > maxRecords) {
+          history.removeRange(maxRecords, history.length);
+        }
+      }
+      return added;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static Future<void> _persistHistory() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final List<Map<String, dynamic>> payload = history
+          .take(200)
+          .map(
+            (NotificationRecord r) => <String, dynamic>{
+              'title': r.title,
+              'message': r.message,
+              'timestamp': r.timestamp.microsecondsSinceEpoch,
+              'color': r.backgroundColor.toARGB32(),
+              'groupKey': r.groupKey,
+              'routeType': r.routeType,
+              'orderId': r.orderId,
+              'itemName': r.itemName,
+              'itemId': r.itemId,
+            },
+          )
+          .toList();
+      await prefs.setString(_historyStorageKey, jsonEncode(payload));
+    } catch (_) {
+      // Best-effort lang — hindi dapat mabigo ang notification dahil sa storage.
+    }
+  }
+
+  /// Pagbalik sa foreground: i-load ang history mula sa disk at ipaalam sa
+  /// customer kung may bago habang nasa background/killed ang app.
+  static Future<void> restoreHistoryOnResume() async {
+    final int added = await loadPersistedHistory();
+    if (added <= 0) return;
+    NotificationCenter.instance.show(
+      NotificationPayload(
+        title: 'May bagong update',
+        message: '$added na bagong notification mula nang umalis ka sa app. '
+            'I-tap ang bell para makita.',
+        backgroundColor: const Color(0xFF203F35),
+        icon: Icons.notifications_active,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  /// Buksan ang Notification History kapag tinap ang push notification.
+  /// Hintayin muna ang navigator key (cold start case) bago mag-navigate.
+  static Future<void> openNotificationHistoryFromPush() async {
+    await loadPersistedHistory();
+
+    BuildContext? context = NotificationCenter.navigatorKey.currentContext;
+    for (int attempt = 0; attempt < 12 && context == null; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      context = NotificationCenter.navigatorKey.currentContext;
+    }
+    if (context == null || !context.mounted) return;
+
+    showNotificationHistory(context);
+  }
+
+  /// I-record ang FCM push (foreground man o background/killed) sa history
+  /// para makita ito ng customer sa bell pagbalik ng app.
+  static Future<void> recordRemoteMessage({
+    required String title,
+    required String body,
+    String? groupKey,
+    Map<String, dynamic>? data,
+  }) async {
+    if (title.trim().isEmpty && body.trim().isEmpty) return;
+    final Map<String, dynamic> payload = data ?? <String, dynamic>{};
+    final String rawType = (payload['type'] ?? '').toString().toLowerCase();
+    _insertOrUpdateRecord(
+      NotificationRecord(
+        title: title.trim().isEmpty ? 'Balai Silayan' : title.trim(),
+        message: body.trim(),
+        timestamp: DateTime.now(),
+        backgroundColor: const Color(0xFF203F35),
+        icon: Icons.notifications_active,
+        groupKey: groupKey ?? payload['order_id']?.toString(),
+        routeType: rawType.isEmpty ? null : rawType,
+        orderId:
+            payload['order_id']?.toString() ?? payload['id']?.toString(),
+        itemName: payload['item_name']?.toString(),
+        itemId: payload['item_id']?.toString(),
+      ),
+    );
+  }
 
   static final Map<String, NotificationPayload> _pendingBanners =
       <String, NotificationPayload>{};
@@ -103,6 +288,11 @@ class AudioNotificationService {
         settings: InitializationSettings(
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
         ),
+        // Kapag tinap ang system notification (foreground/background), buksan
+        // ang Notification History — kahit naka-kill ang app.
+        onDidReceiveNotificationResponse: (NotificationResponse response) {
+          NotificationRouter.handlePayload(response.payload);
+        },
       );
 
       // Android 8+ (API 26+): gawin agad ang channel na may explicit custom
@@ -471,6 +661,10 @@ class AudioNotificationService {
         icon: entry.value.icon,
         dedupeKey: entry.key,
         groupKey: entry.value.groupKey,
+        routeType: entry.value.routeType,
+        orderId: entry.value.orderId,
+        itemName: entry.value.itemName,
+        itemId: entry.value.itemId,
       );
     }
   }
@@ -601,6 +795,8 @@ class AudioNotificationService {
         backgroundColor: const Color(0xFF0EA5E9),
         icon: Icons.receipt_long,
         groupKey: groupKey,
+        routeType: 'bill_requested',
+        orderId: rootOrderId?.toString() ?? orderId?.toString(),
       ),
     );
   }
@@ -661,6 +857,8 @@ class AudioNotificationService {
         groupKey: rootOrderId != null && rootOrderId > 0
             ? UserSession.formatOrderCode(rootOrderId)
             : 'BILL-TABLE-${tableNumber.toString().padLeft(2, '0')}',
+        routeType: 'bill_requested',
+        orderId: rootOrderId?.toString() ?? orderId?.toString(),
       ),
     );
     return true;
@@ -724,6 +922,8 @@ class AudioNotificationService {
         icon: isAdditional ? Icons.add_shopping_cart : Icons.fastfood,
         dedupeKey: dedupeKey,
         groupKey: rootCode,
+        routeType: isAdditional ? 'additional_order' : 'new_order',
+        orderId: rootOrderId?.toString() ?? orderId.toString(),
       ),
     );
     return true;
@@ -767,6 +967,12 @@ class AudioNotificationService {
     final String preview = labels.take(3).join(', ');
     final String more = labels.length > 3 ? ' +${labels.length - 3} more' : '';
 
+    // Unang item ang itatakda para hanapin agad sa Stock Management pag tinap.
+    final Map<String, dynamic> first = items.first;
+    final String firstName =
+        (first['name'] ?? first['item_name'] ?? '').toString();
+    final String firstId = (first['id'] ?? first['item_id'] ?? '').toString();
+
     unawaited(
       _presentBanner(
         title: title,
@@ -777,6 +983,9 @@ class AudioNotificationService {
         icon: outOfStock > 0 ? Icons.remove_shopping_cart : Icons.inventory_2,
         dedupeKey: dedupeKey,
         groupKey: 'STOCK',
+        routeType: 'low_stock',
+        itemName: firstName,
+        itemId: firstId,
       ),
     );
     return true;
@@ -792,7 +1001,24 @@ class AudioNotificationService {
     required IconData icon,
     String? dedupeKey,
     String? groupKey,
+    String? routeType,
+    String? orderId,
+    String? itemName,
+    String? itemId,
   }) async {
+    NotificationRecord buildRecord() => NotificationRecord(
+          title: title,
+          message: message,
+          timestamp: DateTime.now(),
+          backgroundColor: backgroundColor,
+          icon: icon,
+          groupKey: groupKey,
+          routeType: routeType,
+          orderId: orderId,
+          itemName: itemName,
+          itemId: itemId,
+        );
+
     final NotificationPayload payload = NotificationPayload(
       title: title,
       message: message,
@@ -800,6 +1026,10 @@ class AudioNotificationService {
       icon: icon,
       duration: const Duration(seconds: 4),
       groupKey: groupKey,
+      routeType: routeType,
+      orderId: orderId,
+      itemName: itemName,
+      itemId: itemId,
     );
 
     // Kapag background ang app, huwag agad i-consume ang dedupe. Sa web,
@@ -812,16 +1042,7 @@ class AudioNotificationService {
             await Permission.notification.status;
         if (notificationStatus.isGranted) {
           unawaited(playStatusAlertSound());
-          _insertOrUpdateRecord(
-            NotificationRecord(
-              title: title,
-              message: message,
-              timestamp: DateTime.now(),
-              backgroundColor: backgroundColor,
-              icon: icon,
-              groupKey: groupKey,
-            ),
-          );
+          _insertOrUpdateRecord(buildRecord());
           await showSystemNotification(
             title: title,
             message: message,
@@ -847,16 +1068,7 @@ class AudioNotificationService {
 
     unawaited(playStatusAlertSound());
 
-    _insertOrUpdateRecord(
-      NotificationRecord(
-        title: title,
-        message: message,
-        timestamp: DateTime.now(),
-        backgroundColor: backgroundColor,
-        icon: icon,
-        groupKey: groupKey,
-      ),
-    );
+    _insertOrUpdateRecord(buildRecord());
 
     // Overlay-based banner: nasa itaas ng LAHAT ng route, kasama ang
     // nakabukas na dialog (dating natatakpan ng modal barrier ang SnackBar).
@@ -911,6 +1123,7 @@ class AudioNotificationService {
     }
 
     history.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    unawaited(_persistHistory());
   }
 
   /// Ticket header widget for the notification history group.
@@ -958,71 +1171,101 @@ class AudioNotificationService {
   }
 
   /// Single notification history tile widget.
-  static Widget _buildHistoryTile(NotificationRecord item) {
+  /// May [onTap] kapag may tamang destination — tinatap para diretsong
+  /// pumunta sa Order Queue / Stock Management.
+  static Widget _buildHistoryTile(
+    NotificationRecord item, {
+    VoidCallback? onTap,
+  }) {
     final String timeStr =
         '${item.timestamp.hour > 12 ? item.timestamp.hour - 12 : (item.timestamp.hour == 0 ? 12 : item.timestamp.hour)}:${item.timestamp.minute.toString().padLeft(2, '0')} ${item.timestamp.hour >= 12 ? 'PM' : 'AM'}';
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8F4EC),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE5DFD3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: item.backgroundColor,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(item.icon, color: Colors.white, size: 16),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8F4EC),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFE5DFD3)),
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: item.backgroundColor,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(item.icon, color: Colors.white, size: 16),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        item.title,
-                        style: const TextStyle(
-                          fontFamily: 'Inter',
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                          color: Color(0xFF203F35),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.title,
+                            style: const TextStyle(
+                              fontFamily: 'Inter',
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              color: Color(0xFF203F35),
+                            ),
+                          ),
                         ),
-                      ),
+                        Text(
+                          timeStr,
+                          style: const TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 11,
+                            color: Color(0xFF687368),
+                          ),
+                        ),
+                      ],
                     ),
+                    const SizedBox(height: 4),
                     Text(
-                      timeStr,
+                      item.message,
                       style: const TextStyle(
                         fontFamily: 'Inter',
-                        fontSize: 11,
-                        color: Color(0xFF687368),
+                        fontSize: 12,
+                        color: Color(0xFF4A5568),
                       ),
                     ),
+                    if (onTap != null) ...[
+                      const SizedBox(height: 5),
+                      const Text(
+                        'Tap to view',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF0F766E),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  item.message,
-                  style: const TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 12,
-                    color: Color(0xFF4A5568),
-                  ),
+              ),
+              if (onTap != null)
+                const Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: Color(0xFF687368),
                 ),
-              ],
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1096,7 +1339,21 @@ class AudioNotificationService {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _buildHistoryTicketHeader(entry.key),
-                              ...entry.value.map(_buildHistoryTile),
+                              ...entry.value.map(
+                                (NotificationRecord item) => _buildHistoryTile(
+                                  item,
+                                  onTap: item.hasRoute
+                                      ? () {
+                                          // Isara muna ang sheet bago mag-navigate
+                                          // para hindi matakpan ng modal barrier.
+                                          Navigator.pop(ctx);
+                                          NotificationRouter.handleFromHistory(
+                                            item.routeData,
+                                          );
+                                        }
+                                      : null,
+                                ),
+                              ),
                               const SizedBox(height: 8),
                             ],
                           );
