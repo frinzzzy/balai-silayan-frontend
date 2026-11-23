@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
-import '../qr_scanner_screen.dart';
 import '../user_session.dart';
 import '../services/customer_navigation.dart';
 import '../services/notification_center.dart';
@@ -42,6 +41,7 @@ class FinishedOrderDialog {
     String? reason,
     String? message,
     bool forceSessionFinished = false,
+    bool? isTakeoutOverride,
   }) async {
     if (_isShowing) return false;
     final BuildContext? rootContext =
@@ -58,7 +58,7 @@ class FinishedOrderDialog {
       // order sa session), session-finished ang ipakita — hindi "Back to Menu".
       final bool sessionFinished = !isDeclined &&
           (forceSessionFinished || await _isSessionFinished(orderId));
-      final bool isTakeout = UserSession.isTakeout;
+      final bool isTakeout = isTakeoutOverride ?? UserSession.isTakeout;
 
       if (!rootContext.mounted) return false;
 
@@ -233,18 +233,7 @@ class FinishedOrderDialog {
         NotificationCenter.navigatorKey.currentContext;
     if (rootContext == null) return;
 
-    final NavigatorState navigator = Navigator.of(rootContext);
-    if (isTakeout) {
-      navigator.popUntil((route) => route.isFirst);
-      return;
-    }
-
-    navigator.pushAndRemoveUntil(
-      MaterialPageRoute<void>(
-        builder: (_) => const QrScannerScreen(),
-      ),
-      (route) => route.isFirst,
-    );
+    CustomerNavigation.finishSession(rootContext, isTakeout: isTakeout);
   }
 
   static void _returnToOrderChoices({

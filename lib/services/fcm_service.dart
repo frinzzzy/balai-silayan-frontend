@@ -128,15 +128,19 @@ class FcmService {
         _backgroundHandlerRegistered = true;
       }
 
-      // Tap sa push notification (app naka-background o naka-kill): buksan ang
-      // Notification History para makita agad ng admin/customer ang nangyari.
-      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      // Tap sa push notification (app naka-background o naka-kill): i-record
+      // muna sa history bago i-route, para may makikita ang customer kahit
+      // notification-payload (legacy) ang natanggap at hindi tumakbo ang
+      // background handler.
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
+        await _recordFromRemoteMessage(message);
         NotificationRouter.handle(message.data);
       });
       try {
         final RemoteMessage? initialMessage =
             await FirebaseMessaging.instance.getInitialMessage();
         if (initialMessage != null) {
+          await _recordFromRemoteMessage(initialMessage);
           WidgetsBinding.instance.addPostFrameCallback((_) {
             NotificationRouter.handle(initialMessage.data);
           });
@@ -233,6 +237,27 @@ class FcmService {
     } catch (e) {
       debugPrint('⚠️ [FCM] init failed: $e');
     }
+  }
+
+  /// I-save ang push message sa in-app history. Tinatawag ito kapag tinap ang
+  /// notification at sa cold start, para hindi mawala ang record kahit ang
+  /// system SDK lang ang nag-display nito habang patay ang app.
+  static Future<void> _recordFromRemoteMessage(RemoteMessage message) async {
+    final Map<String, dynamic> data = message.data;
+    final String title = message.notification?.title?.toString() ??
+        data['title']?.toString() ??
+        '';
+    final String body = message.notification?.body?.toString() ??
+        data['body']?.toString() ??
+        '';
+    if (title.trim().isEmpty && body.trim().isEmpty) return;
+
+    await AudioNotificationService.recordRemoteMessage(
+      title: title,
+      body: body,
+      groupKey: data['order_id']?.toString(),
+      data: data,
+    );
   }
 
   /// Re-register pagkatapos ng bagong session (QR scan / new order) para

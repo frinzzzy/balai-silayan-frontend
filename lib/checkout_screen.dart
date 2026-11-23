@@ -8,6 +8,7 @@ import 'order_type_selection_screen.dart';
 import 'menu_screen.dart';
 import 'user_session.dart';
 import 'services/order_context.dart';
+import 'services/customer_navigation.dart';
 import 'services/socket_service.dart';
 import 'services/customer_cart_store.dart';
 import 'services/ordering_gate.dart';
@@ -43,9 +44,14 @@ class CheckoutScreen extends StatefulWidget {
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
   bool _isSubmitting = false;
+  bool _takeoutOverride = false;
   late Map<FoodItem, int> _editableCart;
   late double _calculatedTotal;
   late final String _orderNotes;
+
+  /// Effective takeout preference — mula sa widget (Google takeout) o sa
+  /// customer (toggle sa dine-in checkout: "Take Out / To-Go").
+  bool get _effectiveIsTakeout => widget.isTakeout || _takeoutOverride;
 
   String get _baseUrl => ApiConfig.baseUrl;
 
@@ -133,7 +139,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     // Takeout: the Google sign-in already gave us the customer's own virtual
     // table + session. Never fall back to a real dine-in table.
-    final int targetTableId = widget.isTakeout
+    // Takeout override (dine-in customer choosing Take Out / To-Go): itinatago
+    // natin ang fulfillment_type sa backend, pero pinapanatili natin ang
+    // physical table/session (hal. Table 5) na naka-attach sa QR flow.
+    final int targetTableId = _effectiveIsTakeout
         ? (UserSession.activeTableId ?? widget.tableId ?? 1)
         : (widget.tableId ?? UserSession.activeTableId ?? 7);
 
@@ -216,6 +225,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       "notes": _orderNotes.trim().isEmpty ? null : _orderNotes.trim().substring(0, 300),
       "client_order_id": idempotencyKey,
       "timestamp": DateTime.now().toIso8601String(),
+      // Explicit fulfillment: DINE_IN (default) o TAKEOUT. Para sa takeout via
+      // Google ay nasa onlineSession na ito ay automatic na TAKEOUT; dito lang
+      // natin ipapasa ang dine-in override (physical table + takeout).
+      "fulfillment_type": _effectiveIsTakeout ? 'TAKEOUT' : 'DINE_IN',
     };
 
     try {
@@ -454,6 +467,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
               onPressed: () {
                 Navigator.pop(ctx);
+                // Takeout → Welcome/Google sign-in; dine-in → QR scanner.
+                final bool takeout = _effectiveIsTakeout;
+                if (isSessionGone && takeout) {
+                  CustomerNavigation.navigatorPushWelcome(context);
+                  return;
+                }
                 final int tableNum = widget.tableId ?? UserSession.activeTableId ?? UserSession.activeTableNumber ?? 7;
                 Navigator.pushAndRemoveUntil(
                   context,
@@ -466,7 +485,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   (route) => false,
                 );
               },
-              child: const Text('Back to Order Choices', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              child: Text(
+                isSessionGone && _effectiveIsTakeout
+                    ? 'Back to Home'
+                    : 'Back to Order Choices',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         ),
@@ -536,7 +560,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203F35)),
         ),
         content: Text(
-          widget.isTakeout
+          _effectiveIsTakeout
               ? 'Tapos na ang takeout session na ito. Bumalik sa home at mag-sign '
                   'in muli para sa bagong online order.'
               : 'Na-settle na ang table session na ito. I-scan muli ang QR ng table '
@@ -548,15 +572,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
             onPressed: () {
               Navigator.pop(ctx);
+              final bool takeout = _effectiveIsTakeout;
               UserSession.clearSession();
               UserSession.clearAllBillRequests();
               UserSession.targetParentOrderId = null;
               UserSession.lastPlacedOrderId = null;
-              if (widget.isTakeout) {
-                Navigator.of(context).popUntil((route) => route.isFirst);
-              } else {
-                Navigator.of(context).popUntil((route) => route.isFirst);
-              }
+              // Takeout → Welcome/Google sign-in; dine-in → QR scanner.
+              CustomerNavigation.finishSession(context, isTakeout: takeout);
             },
             child: const Text(
               'OK',
@@ -580,7 +602,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       MaterialPageRoute(
         builder: (context) => OrderStatusScreen(
           orderId: orderId,
-          isTakeout: widget.isTakeout,
+          isTakeout: _effectiveIsTakeout,
           tableId: widget.tableId,
           totalAmount: _calculatedTotal,
           isAdditionalOrder:
@@ -713,6 +735,39 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  /// Door 1 (dine-in via QR): kapag nakaupo sa mesa ang customer at pinili
+  /// ng takeout, i-toggle lang natin ito dito — walang QR re-scan, hindi na
+  /// login, at pati na ang fulfillment_type (TAKEOUT) sa backend.
+  Widget _buildTakeoutToggleCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF203F35),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.shopping_bag_outlined, color: const Color(0xFFA47C3D)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              widget.isTakeout
+                  ? 'Dining Preference: Takeout / To-Go'
+                  : 'Dining Preference: Dine-In (Table #${(widget.tableId ?? 7).toString().padLeft(2, '0')})',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+            ),
+          ),
+          Switch(
+            value: _effectiveIsTakeout,
+            onChanged: (bool value) {
+              setState(() => _takeoutOverride = value);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
@@ -789,6 +844,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 24),
+                                if (!widget.isAdditionalOrder && !widget.isTakeout) ...[
+                                  _buildTakeoutToggleCard(),
+                                  const SizedBox(height: 24),
+                                ],
                                 if (_orderNotes.isNotEmpty) ...[
                                   _buildSpecialInstructionsSummaryCard(),
                                   const SizedBox(height: 24),

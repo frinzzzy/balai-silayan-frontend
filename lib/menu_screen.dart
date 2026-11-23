@@ -1209,8 +1209,10 @@ class _MenuScreenState extends State<MenuScreen> {
         orderCode: resolvedOrderCode,
         orderId: (resolvedOrderId ?? UserSession.lastPlacedOrderId ?? '').toString(),
         // session_closed/session_cancelled event = tapos na ang buong table
-        // session, kaya "Session Finished → Scan QR Again" ang ipakita.
+        // session, kaya "Session Finished" ang ipakita.
         forceSessionFinished: true,
+        isTakeoutOverride:
+            _isTakeoutSelected || widget.isTakeout || UserSession.isTakeout,
       );
     });
   }

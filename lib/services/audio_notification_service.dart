@@ -170,6 +170,20 @@ class AudioNotificationService {
   static Future<void> restoreHistoryOnResume() async {
     final int added = await loadPersistedHistory();
     if (added <= 0) return;
+    _showResumeSummary(added);
+  }
+
+  /// Sa cold start (killed app → bukas muli): i-load ang na-save na history
+  /// at magpakita ng summary, para may "ano ang nangyari" agad ang customer.
+  static Future<void> restoreHistoryOnStartup() async {
+    final int added = await loadPersistedHistory();
+    if (added <= 0) return;
+    // Hintayin ang unang frame / navigator bago mag-overlay.
+    await Future<void>.delayed(const Duration(milliseconds: 800));
+    _showResumeSummary(added);
+  }
+
+  static void _showResumeSummary(int added) {
     NotificationCenter.instance.show(
       NotificationPayload(
         title: 'May bagong update',
@@ -294,6 +308,25 @@ class AudioNotificationService {
           NotificationRouter.handlePayload(response.payload);
         },
       );
+
+      // Kung ang app ay BINUKSAN mismo ng pag-tap sa local notification
+      // (killed app), nasa launch details ang payload. I-route ito papunta sa
+      // tamang ticket/history matapos ang unang frame.
+      try {
+        final NotificationAppLaunchDetails? launchDetails =
+            await plugin.getNotificationAppLaunchDetails();
+        final String? launchPayload =
+            launchDetails?.didNotificationLaunchApp == true
+                ? launchDetails?.notificationResponse?.payload
+                : null;
+        if (launchPayload != null && launchPayload.trim().isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            NotificationRouter.handlePayload(launchPayload);
+          });
+        }
+      } catch (e) {
+        debugPrint('⚠️ [Notif] launch details failed: $e');
+      }
 
       // Android 8+ (API 26+): gawin agad ang channel na may explicit custom
       // sound. Kung iasa lang sa unang show(), puwedeng ma-lock ang channel

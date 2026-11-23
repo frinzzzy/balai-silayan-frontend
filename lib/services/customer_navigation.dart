@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../menu_screen.dart';
+import '../qr_scanner_screen.dart';
 import '../user_session.dart';
+import '../welcome_screen.dart';
 import 'customer_order_reset.dart';
 
 /// Sentral na paraan ng pagbabalik sa MenuScreen.
@@ -18,8 +20,7 @@ class CustomerNavigation {
     int? tableNumber,
     bool isAdditionalOrder = false,
     bool resetOrderContext = false,
-  }) {
-    final NavigatorState navigator = Navigator.of(context);
+  }) {    final NavigatorState navigator = Navigator.of(context);
     final int resolvedTable = tableId ??
         UserSession.activeTableId ??
         UserSession.activeTableNumber ??
@@ -57,6 +58,35 @@ class CustomerNavigation {
         ),
         settings: const RouteSettings(name: 'menu'),
       ),
+    );
+  }
+
+  /// Tapos na ang session. Dine-in → QR scanner; takeout → Welcome/Google
+  /// sign-in. Hindi pwedeng `popUntil(isFirst)` lang ang takeout dahil kapag
+  /// na-restore ang app, MenuScreen ang first route — kaya napupunta sa QR/menu
+  /// imbes na Welcome.
+  static void finishSession(
+    BuildContext context, {
+    required bool isTakeout,
+  }) {
+    if (isTakeout) {
+      navigatorPushWelcome(context);
+      return;
+    }
+    navigatorPushQrScanner(context);
+  }
+
+  static void navigatorPushWelcome(BuildContext context) {
+    Navigator.of(context).pushAndRemoveUntil<void>(
+      MaterialPageRoute<void>(builder: (_) => const WelcomeScreen()),
+      (route) => false,
+    );
+  }
+
+  static void navigatorPushQrScanner(BuildContext context) {
+    Navigator.of(context).pushAndRemoveUntil<void>(
+      MaterialPageRoute<void>(builder: (_) => const QrScannerScreen()),
+      (route) => route.isFirst,
     );
   }
 }

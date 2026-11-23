@@ -48,7 +48,7 @@ Future<void> main() async {
   // kapag binuksan ito (may sariling handler).
   CustomerNotificationRouter.register();
   unawaited(AudioNotificationService.requestNotificationPermission());
-  unawaited(AudioNotificationService.loadPersistedHistory());
+  unawaited(AudioNotificationService.restoreHistoryOnStartup());
   unawaited(AudioNotificationService.initializeLocalNotifications());
   unawaited(FcmService.init());
   unawaited(SupabaseRealtimeService.instance.start());

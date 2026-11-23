@@ -16,7 +16,6 @@ import 'services/order_event_router.dart';
 import 'services/customer_navigation.dart';
 import 'config/api_config.dart';
 import 'order_type_selection_screen.dart';
-import 'qr_scanner_screen.dart';
 import 'utils/currency.dart';
 
 class OrderStatusScreen extends StatefulWidget {
@@ -379,9 +378,9 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
         FinishedOrderDialog.show(
           orderCode: orderCode,
           orderId: (rawOrderId ?? '').toString(),
-          // Session-closed event = buong table session ang tapos na, kaya
-          // direkta nang "Session Finished → Scan QR Again" ang ipakita.
+          // Session-closed event = buong table session ang tapos na.
           forceSessionFinished: true,
+          isTakeoutOverride: widget.isTakeout || UserSession.isTakeout,
         ),
       );
     });
@@ -589,16 +588,8 @@ class _OrderStatusScreenState extends State<OrderStatusScreen> {
     UserSession.firstOrderId = null;
     UserSession.autoAdditionalParentId = null;
     OrderContext.instance.reset();
-    if (takeout) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      return;
-    }
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(
-        builder: (_) => const QrScannerScreen(),
-      ),
-      (route) => route.isFirst,
-    );
+    // Takeout → Welcome/Google sign-in; dine-in → QR scanner.
+    CustomerNavigation.finishSession(context, isTakeout: takeout);
   }
 
   /// Bumalik sa Order Type Selection (New Order / Additional Order / Request

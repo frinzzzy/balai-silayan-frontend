@@ -3,7 +3,6 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'assistance_screen.dart';
 import 'order_status_screen.dart';
-import 'qr_scanner_screen.dart';
 import 'user_session.dart';
 import '../widgets/customer_bottom_nav.dart';
 import 'services/global_socket_listener.dart';
@@ -212,16 +211,8 @@ class _BillRequestedScreenState extends State<BillRequestedScreen> {
     UserSession.firstOrderId = null;
     UserSession.autoAdditionalParentId = null;
     OrderContext.instance.reset();
-    if (takeout) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      return;
-    }
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(
-        builder: (_) => const QrScannerScreen(),
-      ),
-      (route) => route.isFirst,
-    );
+    // Takeout → Welcome/Google sign-in; dine-in → QR scanner.
+    CustomerNavigation.finishSession(context, isTakeout: takeout);
   }
 
   /// Back button: bumalik sa pinanggalingan (Order Type Selection o Menu),
