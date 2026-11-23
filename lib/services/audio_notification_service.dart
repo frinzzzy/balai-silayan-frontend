@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../user_session.dart';
 import 'notification_center.dart';
 import 'notification_router.dart';
+import 'service_label.dart';
 
 class NotificationRecord {
   final String title;
@@ -772,13 +773,24 @@ class AudioNotificationService {
     int? orderId,
     int? parentOrderId,
     DateTime? billRequestedAt,
+    bool isTakeout = false,
+    String? customerName,
+    String? customerEmail,
   }) {
     final String requestStamp = billRequestedAt != null
         ? billRequestedAt.toUtc().toIso8601String().substring(0, 19)
         : 'no_timestamp';
+    final bool takeout =
+        isTakeout || ServiceLabel.isVirtualTableNumber(tableNumber);
+    final String identity = takeout
+        ? ServiceLabel.customerDisplay(
+            customerName: customerName,
+            customerEmail: customerEmail,
+          )
+        : '';
     final String sessionKey = sessionId != null && sessionId > 0
         ? 'session_$sessionId'
-        : 'table_$tableNumber';
+        : (takeout ? 'takeout_$identity' : 'table_$tableNumber');
     final int? rootOrderId = parentOrderId != null && parentOrderId > 0
         ? parentOrderId
         : orderId;
@@ -798,6 +810,9 @@ class AudioNotificationService {
     int? orderId,
     int? parentOrderId,
     DateTime? billRequestedAt,
+    bool isTakeout = false,
+    String? customerName,
+    String? customerEmail,
   }) {
     final String dedupeKey = _adminBillDedupeKey(
       tableNumber: tableNumber,
@@ -805,6 +820,9 @@ class AudioNotificationService {
       orderId: orderId,
       parentOrderId: parentOrderId,
       billRequestedAt: billRequestedAt,
+      isTakeout: isTakeout,
+      customerName: customerName,
+      customerEmail: customerEmail,
     );
     // Kung na-seed/naka-alert na ito, huwag nang magdagdag ng history record.
     if (!NotificationCenter.instance.shouldNotify(
@@ -822,17 +840,26 @@ class AudioNotificationService {
         : (orderId != null && orderId > 0
               ? UserSession.formatOrderCode(orderId)
               : 'BILL');
+    final bool takeout =
+        isTakeout || ServiceLabel.isVirtualTableNumber(tableNumber);
+    final String serviceLabel = ServiceLabel.forAdminTitle(
+      isTakeout: takeout,
+      tableNumber: tableNumber,
+      customerName: customerName,
+      customerEmail: customerEmail,
+    );
     final String groupKey = rootOrderId != null && rootOrderId > 0
         ? UserSession.formatOrderCode(rootOrderId)
-        : 'BILL-TABLE-${tableNumber.toString().padLeft(2, '0')}';
+        : (takeout ? 'BILL-TAKEOUT' : 'BILL-TABLE-${tableNumber.toString().padLeft(2, '0')}');
 
     // Walang banner at tunog — record lang para may laman agad ang bell/history
     // pagka-login ng admin, kahit hindi pa nag-po-poll ang bagong order.
     _insertOrUpdateRecord(
       NotificationRecord(
-        title:
-            'Bill Requested — $ticketCode • Table ${tableNumber.toString().padLeft(2, '0')}',
-        message: 'Existing bill request. Waiting for staff to settle.',
+        title: 'Bill Requested — $ticketCode • $serviceLabel',
+        message: takeout
+            ? 'Existing takeout bill request. Waiting for staff to settle.'
+            : 'Existing bill request. Waiting for staff to settle.',
         timestamp: billRequestedAt ?? DateTime.now(),
         backgroundColor: const Color(0xFF0EA5E9),
         icon: Icons.receipt_long,
@@ -854,6 +881,8 @@ class AudioNotificationService {
     DateTime? billRequestedAt,
     dynamic grandTotal,
     String? customerName,
+    String? customerEmail,
+    bool isTakeout = false,
   }) {
     final String dedupeKey = _adminBillDedupeKey(
       tableNumber: tableNumber,
@@ -861,6 +890,9 @@ class AudioNotificationService {
       orderId: orderId,
       parentOrderId: parentOrderId,
       billRequestedAt: billRequestedAt,
+      isTakeout: isTakeout,
+      customerName: customerName,
+      customerEmail: customerEmail,
     );
     final int? rootOrderId = parentOrderId != null && parentOrderId > 0
         ? parentOrderId
@@ -878,9 +910,20 @@ class AudioNotificationService {
         (grandTotal != null && grandTotal.toString().isNotEmpty)
         ? ' • ₱$grandTotal'
         : '';
-    final String who = (customerName != null && customerName.trim().isNotEmpty)
-        ? ' ($customerName)'
-        : '';
+    final bool takeout =
+        isTakeout || ServiceLabel.isVirtualTableNumber(tableNumber);
+    final String serviceLabel = ServiceLabel.forAdminTitle(
+      isTakeout: takeout,
+      tableNumber: tableNumber,
+      customerName: customerName,
+      customerEmail: customerEmail,
+    );
+    final String fullCustomer =
+        ServiceLabel.customerDisplay(
+          customerName: customerName,
+          customerEmail: customerEmail,
+        );
+    final String who = fullCustomer.isEmpty ? '' : ' ($fullCustomer)';
     final String ticketCode = rootOrderId != null && rootOrderId > 0
         ? UserSession.formatOrderCode(rootOrderId)
         : (orderId != null && orderId > 0
@@ -889,16 +932,18 @@ class AudioNotificationService {
 
     unawaited(
       _presentBanner(
-        title:
-            'Bill Requested — $ticketCode • Table ${tableNumber.toString().padLeft(2, '0')}',
-        message:
-            'May customer na humihingi ng bill$who.$total Pumunta na sa table.',
+        title: 'Bill Requested — $ticketCode • $serviceLabel',
+        message: takeout
+            ? 'Takeout customer$who ay humihingi ng bill.$total I-settle na ang order.'
+            : 'May customer na humihingi ng bill$who.$total Pumunta na sa table.',
         backgroundColor: const Color(0xFF0EA5E9),
         icon: Icons.receipt_long,
         dedupeKey: dedupeKey,
         groupKey: rootOrderId != null && rootOrderId > 0
             ? UserSession.formatOrderCode(rootOrderId)
-            : 'BILL-TABLE-${tableNumber.toString().padLeft(2, '0')}',
+            : (takeout
+                ? 'BILL-TAKEOUT'
+                : 'BILL-TABLE-${tableNumber.toString().padLeft(2, '0')}'),
         routeType: 'bill_requested',
         orderId: rootOrderId?.toString() ?? orderId?.toString(),
       ),
@@ -914,6 +959,9 @@ class AudioNotificationService {
     bool isAdditional = false,
     String? itemsSummary,
     dynamic totalAmount,
+    bool isTakeout = false,
+    String? customerName,
+    String? customerEmail,
   }) {
     final String orderCode = UserSession.formatOrderCode(orderId);
     final int? rootOrderId = parentOrderId != null && parentOrderId > 0
@@ -946,18 +994,35 @@ class AudioNotificationService {
         (itemsSummary != null && itemsSummary.trim().isNotEmpty)
         ? ' ${itemsSummary.trim()}'
         : '';
+    final bool takeout =
+        isTakeout || ServiceLabel.isVirtualTableNumber(tableNumber);
+    final String serviceLabel = ServiceLabel.forAdminTitle(
+      isTakeout: takeout,
+      tableNumber: tableNumber,
+      customerName: customerName,
+      customerEmail: customerEmail,
+    );
+    final String fullCustomer =
+        ServiceLabel.customerDisplay(
+          customerName: customerName,
+          customerEmail: customerEmail,
+        );
     final String parentNote = isAdditional
         ? ' • Additional sa Ticket $rootCode'
         : '';
-    final String title = isAdditional
-        ? 'Additional Order — $orderCode'
-        : 'New Order — $orderCode';
-    final String tableLabel = 'Table ${tableNumber.toString().padLeft(2, '0')}';
+    final String title = takeout
+        ? '${isAdditional ? 'Additional' : 'New'} Takeout Order — $serviceLabel'
+        : (isAdditional
+            ? 'Additional Order — $orderCode'
+            : 'New Order — $orderCode');
+    final String detailLabel = takeout && fullCustomer.isNotEmpty
+        ? fullCustomer
+        : serviceLabel;
 
     unawaited(
       _presentBanner(
         title: title,
-        message: '$tableLabel$parentNote.$items$total',
+        message: '$detailLabel$parentNote.$items$total',
         backgroundColor: isAdditional
             ? const Color(0xFF8B5CF6)
             : const Color(0xFF0F766E),

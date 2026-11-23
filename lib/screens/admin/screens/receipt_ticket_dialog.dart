@@ -11,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/admin_order_model.dart';
 import '../../../config/business_info.dart';
+import '../../../services/service_label.dart';
 import '../../../theme/app_theme.dart';
 
 class ReceiptTicketDialog extends StatelessWidget {
@@ -306,9 +307,26 @@ class ReceiptTicketDialog extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: <Widget>[
             Text('Order Code: #$_receiptNo', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
-            Text('Table: ${order.tableNumber.toString().padLeft(2, '0')}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AdminTheme.textDark)),
+            Text(
+              order.isTakeout
+                  ? 'Takeout'
+                  : 'Table: ${order.tableNumber.toString().padLeft(2, '0')}',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AdminTheme.textDark),
+            ),
           ],
         ),
+        if (order.isTakeout &&
+            (order.customerName.isNotEmpty ||
+                (order.customerEmail ?? '').isNotEmpty)) ...<Widget>[
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Customer: ${ServiceLabel.customerDisplay(customerName: order.customerName, customerEmail: order.customerEmail)}',
+              style: const TextStyle(fontSize: 10, color: AdminTheme.infoText),
+            ),
+          ),
+        ],
         if (!compact) ...<Widget>[
           const SizedBox(height: 8),
           const Divider(thickness: 1, color: AdminTheme.border),

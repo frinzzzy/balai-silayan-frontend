@@ -12,6 +12,8 @@ import 'screens/admin/screens/staff_management_screen.dart';
 import 'services/socket_service.dart';
 import 'services/audio_notification_service.dart';
 import 'services/fcm_service.dart';
+import 'services/notification_router.dart';
+import 'services/service_label.dart';
 import 'models/user_session.dart';
 import 'theme/app_theme.dart';
 import 'theme/admin_tokens.dart';
@@ -24,6 +26,10 @@ import 'dart:convert';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
+
+  /// Diagnostic button lang ito — itinago muna sa release UI. I-true lang
+  /// ulit kapag kailangang i-verify ang FCM sa bagong device.
+  static const bool showPushTestUi = false;
 
   @override
   State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
@@ -40,6 +46,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   bool _isLoggedIn = false;
   final bool _isApiConnected = true; // Locked to production API
   int _currentTabIndex = 0;
+
+  /// Order na dapat i-highlight pagkatapos mag-tap ng new/additional order push.
+  int? _pushFocusOrderId;
+
+  /// Notification na tinap bago pa nag-login — ipapapply pagkatapos ng login.
+  Map<String, dynamic>? _pendingPushNavigation;
+
   bool _isLoading = false;
   bool _isLoggingIn = false;
 
@@ -75,6 +88,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    // I-enroll ang admin bilang destination ng lahat ng push taps.
+    NotificationRouter.registerHandler(_handlePushNavigation);
     if (_isLoggedIn) {
       _loadDashboardData();
       _initSocketSync();
@@ -89,6 +104,179 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  /// Tinap ang push notification. Kung hindi pa naka-login, itago muna at
+  /// ipapapply pagkatapos mag-login (cold-start case).
+  void _handlePushNavigation(Map<String, dynamic> data) {
+    if (!_isLoggedIn || !mounted) {
+      _pendingPushNavigation = data;
+      return;
+    }
+    _applyPushNavigation(data);
+  }
+
+  /// Contextual deep-link ayon sa `type` ng push payload.
+  void _applyPushNavigation(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final String type = (data['type'] ?? '').toString().toLowerCase();
+    final dynamic rawOrderId = data['order_id'] ?? data['id'];
+    final int? orderId = int.tryParse(rawOrderId?.toString() ?? '');
+    final String itemName = (data['item_name'] ?? '').toString();
+
+    if (type == 'low_stock' || type == 'out_of_stock') {
+      if (_allowedTabIndexes().contains(2)) {
+        setState(() => _currentTabIndex = 2);
+        _stockScreenKey.currentState?.focusLowStock(
+          itemName: itemName,
+          itemId: data['item_id']?.toString(),
+        );
+      } else {
+        AudioNotificationService.openNotificationHistoryFromPush();
+      }
+      return;
+    }
+
+    if (type == 'new_order' ||
+        type == 'additional_order' ||
+        type == 'bill_requested') {
+      setState(() {
+        _currentTabIndex = 0;
+        _pushFocusOrderId = orderId;
+      });
+      _loadDashboardData(silent: true);
+      return;
+    }
+
+    // Unknown type — history na lang para hindi mawala ang context.
+    AudioNotificationService.openNotificationHistoryFromPush();
+  }
+
+  /// Diagnostic UI: makita kung configured ang FCM at kung may staff token,
+  /// at makapagpadala ng test push na may tamang `type` para sa deep-link.
+  Future<void> _showPushDiagnostics() async {
+    if (!mounted) return;
+    String statusText = 'Checking…';
+    try {
+      final String? token = AdminService.staffAuthToken;
+      final http.Response statusRes = await http
+          .get(
+            Uri.parse('${ApiConfig.baseUrl}/api/v1/staff/fcm-token/status'),
+            headers: <String, String>{
+              'Content-Type': 'application/json',
+              if (token != null && token.isNotEmpty)
+                'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+      if (statusRes.statusCode == 200) {
+        final dynamic decoded = jsonDecode(statusRes.body);
+        final dynamic data = decoded is Map ? decoded['data'] : null;
+        final bool configured = data?['fcmConfigured'] == true;
+        final int count = int.tryParse(
+              (data?['tokenCount'] ?? 0).toString(),
+            ) ??
+            0;
+        statusText = configured
+            ? 'FCM: ready • Registered staff devices: $count'
+            : 'FCM: NOT configured sa backend (check server env/logs)';
+      } else {
+        statusText = 'Status check failed (${statusRes.statusCode})';
+      }
+    } catch (e) {
+      statusText = 'Status check failed: $e';
+    }
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDFA),
+        title: const Text(
+          'Push Notification Test',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF203F35),
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(statusText, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            const Text(
+              'Pumili ng test notification. I-tap ito pag dumating para '
+              'masubukan ang tamang destination.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF788078)),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _sendTestPush('low_stock');
+            },
+            child: const Text('Low Stock'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _sendTestPush('bill_requested');
+            },
+            child: const Text('Bill'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF203F35),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _sendTestPush('new_order');
+            },
+            child: const Text('New Order'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sendTestPush(String type) async {
+    if (!mounted) return;
+    try {
+      final String? token = AdminService.staffAuthToken;
+      final http.Response response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/api/v1/staff/fcm-token/test'),
+            headers: <String, String>{
+              'Content-Type': 'application/json',
+              if (token != null && token.isNotEmpty)
+                'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode(<String, String>{'type': type}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            response.statusCode == 200
+                ? 'Test push sent ($type). I-tap ang notification.'
+                : 'Test push failed (${response.statusCode})',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Test push failed: $e')),
+      );
+    }
   }
 
   void _initSocketSync() {
@@ -213,6 +401,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         isAdditional: order.isAdditional,
         itemsSummary: order.itemsDescription,
         totalAmount: order.totalAmount.toStringAsFixed(2),
+        isTakeout: order.isTakeout,
+        customerName: order.customerName,
+        customerEmail: order.customerEmail,
       );
     }
   }
@@ -228,6 +419,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         isAdditional: true,
         itemsSummary: order.itemsDescription,
         totalAmount: order.totalAmount.toStringAsFixed(2),
+        isTakeout: order.isTakeout,
+        customerName: order.customerName,
+        customerEmail: order.customerEmail,
       );
     }
   }
@@ -310,6 +504,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           orderId: order.id,
           parentOrderId: order.parentOrderId,
           billRequestedAt: order.billRequestedAt,
+          isTakeout: order.isTakeout,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail,
         );
       } else {
         AudioNotificationService.showAdminBillRequestedBanner(
@@ -319,6 +516,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           parentOrderId: order.parentOrderId,
           billRequestedAt: order.billRequestedAt,
           grandTotal: order.totalAmount.toStringAsFixed(2),
+          isTakeout: order.isTakeout,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail,
         );
       }
     }
@@ -347,22 +547,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         (data['session_id'] ?? '').toString(),
       );
 
+      final int? rawOrderId = int.tryParse(
+        (data['order_id'] ?? data['ticket_order_id'] ?? '').toString(),
+      );
+      // Hanapin ang order sa queue para makuha ang tamang customer identity —
+      // ang virtual table number (hal. 9090990) ay HINDI ipinapakita sa admin.
+      AdminOrder? matchedOrder;
+      for (final AdminOrder order in _orders) {
+        final bool matchesSession =
+            sessionId != null && order.sessionId == sessionId;
+        final bool matchesTable =
+            rawTableId != null && order.tableNumber == rawTableId;
+        final bool matchesOrder = rawOrderId != null && order.id == rawOrderId;
+        if (matchesSession || matchesTable || matchesOrder) {
+          matchedOrder = order;
+          break;
+        }
+      }
+
       // Fallback sa table number mula sa kasalukuyang queue kung table_id lang
       // ang nasa socket payload.
-      int? tableNumber = rawTableNumber;
-      if (tableNumber == null) {
-        for (final AdminOrder order in _orders) {
-          final bool matchesSession =
-              sessionId != null && order.sessionId == sessionId;
-          final bool matchesTable =
-              rawTableId != null && order.tableNumber == rawTableId;
-          if (matchesSession || matchesTable) {
-            tableNumber = order.tableNumber;
-            break;
-          }
-        }
-        tableNumber ??= rawTableId;
-      }
+      int? tableNumber = rawTableNumber ?? matchedOrder?.tableNumber ?? rawTableId;
 
       final dynamic rawRequestedAt =
           data['bill_requested_at'] ?? data['requested_at'];
@@ -376,29 +581,46 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           : null;
 
       if (tableNumber != null && tableNumber > 0) {
-        final int? orderId = int.tryParse(
-          (data['order_id'] ?? data['ticket_order_id'] ?? '').toString(),
-        );
         int? parentOrderId = int.tryParse(
           (data['parent_order_id'] ?? '').toString(),
         );
-        // Kung wala sa payload, hanapin sa kasalukuyang queue para ma-group
-        // ang alert sa root ticket.
-        if (parentOrderId == null && orderId != null) {
-          for (final AdminOrder order in _orders) {
-            if (order.id == orderId) {
-              parentOrderId = order.parentOrderId;
-              break;
-            }
-          }
-        }
+        parentOrderId ??= matchedOrder?.parentOrderId;
+
+        final String payloadGivenName =
+            (data['customer_given_name'] ?? '').toString().trim();
+        final String payloadFamilyName =
+            (data['customer_family_name'] ?? '').toString().trim();
+        final String payloadFullName = <String>[
+          if (payloadGivenName.isNotEmpty) payloadGivenName,
+          if (payloadFamilyName.isNotEmpty) payloadFamilyName,
+        ].join(' ').trim();
+        final String payloadName =
+            (data['customer_name'] ?? '').toString().trim();
+        final String customerName = payloadFullName.isNotEmpty
+            ? payloadFullName
+            : (payloadName.isNotEmpty
+                ? payloadName
+                : matchedOrder?.customerName ?? '');
+        final String customerEmail =
+            (data['customer_email'] ?? '').toString().trim().isEmpty
+            ? matchedOrder?.customerEmail ?? ''
+            : data['customer_email'].toString().trim();
+        final bool isTakeout =
+            (data['fulfillment_type'] ?? '').toString().toUpperCase() ==
+                'TAKEOUT' ||
+            matchedOrder?.isTakeout == true ||
+            ServiceLabel.isVirtualTableNumber(tableNumber);
+
         AudioNotificationService.showAdminBillRequestedBanner(
           tableNumber: tableNumber,
           sessionId: sessionId,
-          orderId: orderId,
+          orderId: rawOrderId,
           parentOrderId: parentOrderId,
           billRequestedAt: requestedAt,
           grandTotal: total?.toStringAsFixed(2),
+          isTakeout: isTakeout,
+          customerName: customerName,
+          customerEmail: customerEmail,
         );
       }
     }
@@ -471,6 +693,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         }
         _loadDashboardData();
         _initSocketSync();
+
+        // Kapag may notification na tinap bago nag-login, pupuntahan na ngayon.
+        final Map<String, dynamic>? pending = _pendingPushNavigation;
+        if (pending != null) {
+          _pendingPushNavigation = null;
+          _applyPushNavigation(pending);
+        }
 
         final String displayName =
             AdminService.currentUser?.displayName ?? username;
@@ -796,6 +1025,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ],
             ),
             actions: [
+              if (AdminDashboardScreen.showPushTestUi)
+                IconButton(
+                  tooltip: 'Test push notification',
+                  onPressed: _showPushDiagnostics,
+                  icon: const Icon(Icons.send_outlined, color: Colors.white),
+                ),
               Builder(
                 builder: (context) {
                   final int unread =
@@ -881,6 +1116,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                             onReopenBill: _handleReopenBill,
                             onRefresh: _loadDashboardData,
                             stats: _salesStats,
+                            focusOrderId: _pushFocusOrderId,
                           ),
                           SalesAnalyticsScreen(
                             stats: _salesStats,
