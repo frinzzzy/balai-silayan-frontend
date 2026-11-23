@@ -220,6 +220,12 @@ class AudioNotificationService {
     Map<String, dynamic>? data,
   }) async {
     if (title.trim().isEmpty && body.trim().isEmpty) return;
+
+    // Basahin muna ang existing history. Kapag tumatakbo ito sa background
+    // isolate (killed app), walang laman ang in-memory `history` — kung hindi
+    // ito i-load, mapapatungan ng isang record ang buong na-save na history.
+    await loadPersistedHistory();
+
     final Map<String, dynamic> payload = data ?? <String, dynamic>{};
     final String rawType = (payload['type'] ?? '').toString().toLowerCase();
     _insertOrUpdateRecord(
@@ -237,6 +243,9 @@ class AudioNotificationService {
         itemId: payload['item_id']?.toString(),
       ),
     );
+    // I-await ang disk write para siguradong naka-save bago ma-teardown ang
+    // background isolate ng FCM.
+    await _persistHistory();
   }
 
   static final Map<String, NotificationPayload> _pendingBanners =
