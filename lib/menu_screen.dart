@@ -11,6 +11,7 @@ import 'session_bill_screen.dart';
 import 'welcome_screen.dart';
 import 'user_session.dart';
 import '../widgets/customer_bottom_nav.dart';
+import '../widgets/ticket_picker_dialog.dart';
 import '../widgets/finished_order_dialog.dart';
 import 'services/audio_notification_service.dart';
 import 'services/global_socket_listener.dart';
@@ -20,6 +21,7 @@ import 'services/order_event_bus.dart';
 import 'services/order_event_router.dart';
 import 'services/customer_cart_store.dart';
 import 'services/customer_order_reset.dart';
+import 'services/customer_ticket_service.dart';
 import 'services/ordering_gate.dart';
 import 'config/api_config.dart';
 import 'utils/currency.dart';
@@ -262,6 +264,7 @@ class _MenuScreenState extends State<MenuScreen> {
   Timer? _heartbeatTimer;
   Timer? _statusPollTimer;
   bool _dialogShown = false;
+  bool _ticketsLoading = false;
   int? _refreshToken;
   int? _contextToken;
   bool _pollInFlight = false;
@@ -270,6 +273,11 @@ class _MenuScreenState extends State<MenuScreen> {
   /// Additional ba ang kasalukuyang order flow? Kasama ang auto-additional na
   /// naka-set pagkatapos mag-place ng order habang nasa Menu pa lang.
   bool get _effectiveAdditional {
+    // Manual takeout choice ang uunahin — kahit may autoAdditional mula sa
+    // nakaraang order, ang pinili ng customer sa cart ang susundin.
+    if (_isTakeoutSelected && _takeoutOrderTypeResolved) {
+      return _takeoutChoseAdditional;
+    }
     if (UserSession.autoAdditionalParentId != null) return true;
     if (_forceNewOrderMode) return false;
     return widget.isAdditionalOrder || UserSession.isAdditionalOrder;
@@ -278,6 +286,11 @@ class _MenuScreenState extends State<MenuScreen> {
   /// Naka-set kapag pinili ng customer ang "Continue as New Order" matapos
   /// ma-block ang additional order (hal. PREPARING na ang parent).
   bool _forceNewOrderMode = false;
+
+  /// Takeout: na-asks na ba ang customer ng New/Additional choice para sa
+  /// kasalukuyang laman ng cart? I-reset kapag naubos ang cart (tapos mag-order).
+  bool _takeoutOrderTypeResolved = false;
+  bool _takeoutChoseAdditional = false;
 
   /// Ticket na pagdadagdag-an / iko-consider para sa bill at status gate.
   dynamic get _activeParentOrderId =>
@@ -321,6 +334,14 @@ class _MenuScreenState extends State<MenuScreen> {
     }
 
     // Initialisahin ang order context ayon sa pinanggalingan ng Menu.
+    // Takeout: huwag ipagpalagay na additional ang susunod na order — manual
+    // na pipiliin ng customer sa cart (New Order / Additional Order).
+    if (_isTakeoutSelected && !widget.isAdditionalOrder) {
+      UserSession.isAdditionalOrder = false;
+      UserSession.targetParentOrderId = null;
+      UserSession.autoAdditionalParentId = null;
+    }
+
     if (widget.resetOrderContext) {
       // Sadyang brand-new order (mula sa Order Type Selection).
       UserSession.isAdditionalOrder = widget.isAdditionalOrder;
@@ -410,6 +431,13 @@ class _MenuScreenState extends State<MenuScreen> {
         imageUrl: line.imageUrl,
       );
       _orderCart[item] = line.quantity;
+    }
+
+    // Takeout: bagong cart cycle → tanungin muli ang New/Additional choice.
+    if (_orderCart.isEmpty && _isTakeoutSelected) {
+      _takeoutOrderTypeResolved = false;
+      _takeoutChoseAdditional = false;
+      _forceNewOrderMode = false;
     }
   }
 
@@ -509,6 +537,311 @@ class _MenuScreenState extends State<MenuScreen> {
     }
   }
 
+  /// Takeout (Google sign-in) flow: manual order-type selection bago mag-checkout.
+  ///
+  /// - `new`        → bagong ticket (different ticket)
+  /// - `additional` → idadagdag sa napiling unfinished takeout ticket (same ticket)
+  /// - `view_tickets` → buksan ang My Tickets
+  /// - `null`       → kinansela ng customer
+  ///
+  /// Kompakto na bottom sheet: walang mahabang paliwanag, at hindi lumalabas
+  /// ang Additional Order kung wala pang existing ticket.
+  Future<String?> _showTakeoutOrderTypeDialog({
+    required bool hasOpenTickets,
+  }) async {
+    if (!mounted) return null;
+    return showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFFFFFDFA),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD8D0C2),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'Takeout order',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF203F35),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'Pumili kung paano ka mag-oorder.',
+                  style: TextStyle(fontSize: 13, color: Color(0xFF788078)),
+                ),
+                const SizedBox(height: 14),
+                _buildTakeoutOption(
+                  icon: Icons.add_circle_outline_rounded,
+                  title: 'New Order',
+                  subtitle: 'Bagong ticket',
+                  onTap: () => Navigator.pop(sheetContext, 'new'),
+                ),
+                if (hasOpenTickets) ...<Widget>[
+                  const SizedBox(height: 10),
+                  _buildTakeoutOption(
+                    icon: Icons.playlist_add_rounded,
+                    title: 'Additional Order',
+                    subtitle: 'Idagdag sa existing ticket',
+                    onTap: () => Navigator.pop(sheetContext, 'additional'),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                _buildTakeoutOption(
+                  icon: Icons.receipt_long_rounded,
+                  title: 'View My Tickets',
+                  subtitle: 'Status ng mga orders',
+                  onTap: () => Navigator.pop(sheetContext, 'view_tickets'),
+                ),
+                const SizedBox(height: 6),
+                TextButton(
+                  onPressed: () => Navigator.pop(sheetContext, null),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(color: Color(0xFF788078)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTakeoutOption({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8F3EA),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFE5DCCB)),
+          ),
+          child: Row(
+            children: <Widget>[
+              Container(
+                width: 40,
+                height: 40,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF203F35),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 20, color: Colors.white),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF203F35),
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF788078),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: Color(0xFFA47C3D),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Kunin ang bukas na takeout tickets ng session. Best-effort — empty list
+  /// kung walang session, walang ticket, o bigo ang network.
+  Future<List<dynamic>> _fetchOpenTakeoutTickets() async {
+    final int tableId = _chosenTableNumber ?? 7;
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$_baseUrl/api/v1/orders/unfinished?table_id=$tableId'),
+            headers: _authHeaders,
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) return <dynamic>[];
+
+      final decoded = jsonDecode(response.body);
+      final List raw = decoded['orders'] ?? decoded['data'] ?? <dynamic>[];
+      // Karagdagang safety: kung may session id ang customer, i-filter lang
+      // ang tickets ng session na 'yon (baka magkahalo ang virtual table).
+      final int? sessionId = UserSession.activeSessionId ??
+          int.tryParse(UserSession.sessionId ?? '');
+      return raw.where((dynamic o) {
+        if (o is! Map || sessionId == null) return o is Map;
+        final dynamic orderSession = o['session_id'];
+        if (orderSession == null) return true;
+        return orderSession.toString() == sessionId.toString();
+      }).toList();
+    } catch (_) {
+      return <dynamic>[];
+    }
+  }
+
+  /// Pumili ng unfinished takeout ticket na pagdadaggan ng items.
+  /// Na-scope sa kasalukuyang takeout table/session ng customer.
+  Future<Map<dynamic, dynamic>?> _showTakeoutSelectTicketDialog({
+    List<dynamic>? preloaded,
+  }) async {
+    final List<dynamic> ordersList =
+        preloaded ?? await _fetchOpenTakeoutTickets();
+
+    if (!mounted) return null;
+    if (ordersList.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Wala pang existing takeout ticket. Gumawa muna ng New Order.',
+            ),
+            backgroundColor: Color(0xFF53766C),
+          ),
+        );
+      return null;
+    }
+
+    return showTicketPickerDialog(
+      context: context,
+      orders: ordersList,
+      title: 'Pumili ng Ticket',
+      subtitle: 'Sa aling takeout ticket idadagdag ang mga items?',
+    );
+  }
+
+  /// Takeout: listahan ng lahat ng orders (kabilang ang COMPLETED/PAID) mula
+  /// sa secured session endpoint. Pwede itong buksan kahit walang laman ang cart.
+  Future<void> _viewMyTickets() async {
+    if (!mounted || _ticketsLoading) return;
+    setState(() => _ticketsLoading = true);
+
+    final Future<void> loader = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(
+        canPop: false,
+        child: Center(
+          child: CircularProgressIndicator(color: Color(0xFF203F35)),
+        ),
+      ),
+    );
+
+    List<dynamic> tickets = <dynamic>[];
+    String? errorMessage;
+    try {
+      tickets = await CustomerTicketService.fetchRecentTickets();
+    } catch (error) {
+      errorMessage = error.toString().replaceFirst('Exception: ', '');
+    }
+
+    if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+    await loader;
+    if (!mounted) return;
+    setState(() => _ticketsLoading = false);
+
+    if (tickets.isEmpty) {
+      final bool hasError = errorMessage != null;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              hasError
+                  ? 'Hindi ma-load ang tickets ngayon. Subukan muli.'
+                  : 'Wala ka pang order. Gumawa muna ng New Order para may ticket.',
+            ),
+            backgroundColor:
+                hasError ? const Color(0xFF8E5136) : const Color(0xFF53766C),
+          ),
+        );
+      return;
+    }
+
+    final Map<dynamic, dynamic>? selected = await showTicketPickerDialog(
+      context: context,
+      orders: tickets,
+      title: 'My Tickets',
+      subtitle: 'Pumili ng order para makita ang status at details.',
+    );
+    if (selected == null || !mounted) return;
+
+    await _openTicketDetails(selected);
+  }
+
+  Future<void> _openTicketDetails(Map<dynamic, dynamic> ticket) async {
+    final dynamic orderId = ticket['id'] ?? ticket['order_id'];
+    final double totalAmount =
+        double.tryParse(ticket['total_amount']?.toString() ?? '0') ?? 0.0;
+    final List<dynamic> items = ticket['items'] is List
+        ? List<dynamic>.from(ticket['items'] as List)
+        : <dynamic>[];
+    final bool isAdditional =
+        ticket['is_additional_order'] == true ||
+            ticket['parent_order_id'] != null ||
+            ticket['order_type']?.toString() == 'ADDITIONAL';
+
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => OrderStatusScreen(
+          orderId: orderId,
+          isTakeout: true,
+          tableId: _chosenTableNumber ?? UserSession.activeTableId,
+          totalAmount: totalAmount,
+          isAdditionalOrder: isAdditional,
+          initialOrderItems: items,
+          initialNotes: (ticket['notes'] ?? '').toString(),
+        ),
+      ),
+    );
+  }
+
   Future<void> _openCartScreen() async {
     // Kung may laman ang cart, i-check ang gating bago payagang magpatuloy.
     // Kung wala, papayagan pa ring buksan ang Cart para makita ang active
@@ -516,7 +849,44 @@ class _MenuScreenState extends State<MenuScreen> {
     if (!await _pruneUnavailableCartItems()) return;
     if (_orderCart.isNotEmpty && !await _ensureCanAddItems()) return;
     if (!mounted) return;
-    final updatedCart = await Navigator.push<Map<FoodItem, int>>(
+
+    // TAKE OUT: manual order type is kada cart cycle. "Additional" = same
+    // ticket; "New" = hiwalay na bagong ticket.
+    if (_isTakeoutSelected && _orderCart.isNotEmpty && !_takeoutOrderTypeResolved) {
+      // Isang fetch lang: dito natin malalaman kung may existing ticket bago
+      // ipakita ang Additional Order option.
+      final List<dynamic> openTickets = await _fetchOpenTakeoutTickets();
+      if (!mounted) return;
+      final String? choice = await _showTakeoutOrderTypeDialog(
+        hasOpenTickets: openTickets.isNotEmpty,
+      );
+      if (choice == null || !mounted) return;
+
+      if (choice == 'view_tickets') {
+        await _viewMyTickets();
+        return;
+      }
+
+      if (choice == 'additional') {
+        final Map<dynamic, dynamic>? ticket =
+            await _showTakeoutSelectTicketDialog(preloaded: openTickets);
+        if (ticket == null || !mounted) return;
+        final dynamic parentId = ticket['id'] ?? ticket['order_id'];
+        _takeoutChoseAdditional = true;
+        UserSession.isAdditionalOrder = true;
+        UserSession.targetParentOrderId = parentId?.toString();
+        UserSession.autoAdditionalParentId = parentId;
+      } else {
+        _takeoutChoseAdditional = false;
+        UserSession.isAdditionalOrder = false;
+        UserSession.targetParentOrderId = null;
+        UserSession.autoAdditionalParentId = null;
+      }
+      _takeoutOrderTypeResolved = true;
+      setState(() {});
+    }
+
+    final Map<FoodItem, int>? updatedCart = await Navigator.push<Map<FoodItem, int>>(
       context,
       MaterialPageRoute(
         builder: (context) => ShoppingCartScreen(
@@ -615,6 +985,9 @@ class _MenuScreenState extends State<MenuScreen> {
   /// Pareho sa Order Type Selection ang gating bago magdagdag ng items:
   /// bill-requested at blocked ticket statuses.
   Future<bool> _ensureCanAddItems() async {
+    // Takeout: hintayin muna ang manual New/Additional choice bago mag-gate.
+    // Kapag "New Order" ang pipiliin, hiwalay na ticket kaya walang parent gate.
+    if (_isTakeoutSelected && !_takeoutOrderTypeResolved) return true;
     if (!_effectiveAdditional) return true;
     if (_gateCheckInFlight) return false;
     _gateCheckInFlight = true;
@@ -744,6 +1117,10 @@ class _MenuScreenState extends State<MenuScreen> {
     UserSession.autoAdditionalParentId = null;
     UserSession.firstOrderId = null;
     _forceNewOrderMode = true;
+    if (_isTakeoutSelected) {
+      _takeoutOrderTypeResolved = true;
+      _takeoutChoseAdditional = false;
+    }
     OrderingGate.invalidate();
     if (mounted) setState(() {});
   }
@@ -1130,7 +1507,7 @@ class _MenuScreenState extends State<MenuScreen> {
     if (!mounted) return;
     final bool hasCart = _orderCart.isNotEmpty;
 
-    final bool? leave = await showDialog<bool>(
+    final String? leave = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFFFFFDFA),
@@ -1149,12 +1526,19 @@ class _MenuScreenState extends State<MenuScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
+            onPressed: () => Navigator.pop(ctx, 'stay'),
             child: const Text('Continue ordering', style: TextStyle(color: Color(0xFF788078))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'welcome'),
+            child: const Text(
+              'Back to Welcome',
+              style: TextStyle(color: Color(0xFF8E5136), fontWeight: FontWeight.bold),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203F35)),
-            onPressed: () => Navigator.pop(ctx, true),
+            onPressed: () => Navigator.pop(ctx, 'leave'),
             child: const Text(
               'Leave',
               style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
@@ -1164,14 +1548,27 @@ class _MenuScreenState extends State<MenuScreen> {
       ),
     );
 
-    if (leave != true || !mounted) return;
+    if (leave == null || leave == 'stay' || !mounted) return;
+
+    // Explicit na daan pabalik sa login/Welcome — kahit QR (manual) ang
+    // pinanggalingan at kahit naka-restore ang session bilang root page.
+    if (leave == 'welcome') {
+      UserSession.clearSession();
+      Navigator.of(context).pushAndRemoveUntil<void>(
+        MaterialPageRoute<void>(builder: (_) => const WelcomeScreen()),
+        (route) => false,
+      );
+      return;
+    }
 
     if (_isTakeoutSelected) {
       final NavigatorState nav = Navigator.of(context);
       UserSession.clearSession();
       nav.pushAndRemoveUntil(
         MaterialPageRoute<void>(builder: (_) => const WelcomeScreen()),
-        (route) => route.isFirst,
+        // Alisin lahat ng route (kasama ang Menu na naka-restore bilang home)
+        // para hindi na makabalik ang customer sa lumang session gamit ang back.
+        (route) => false,
       );
       return;
     }
@@ -1285,6 +1682,26 @@ class _MenuScreenState extends State<MenuScreen> {
           ),
           Row(
             children: [
+              if (_isTakeoutSelected) ...[
+                InkWell(
+                  onTap: _viewMyTickets,
+                  borderRadius: BorderRadius.circular(22),
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFFE5DFD3)),
+                    ),
+                    child: const Icon(
+                      Icons.receipt_long_outlined,
+                      color: Color(0xFF203F35),
+                      size: 20,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
               InkWell(
                 onTap: () => AudioNotificationService.showNotificationHistory(context),
                 borderRadius: BorderRadius.circular(22),
